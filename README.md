@@ -12,7 +12,17 @@ DSH 桌面端内嵌侧边栏，包名 **`dsh-cursorlike-sidebar`**，项目目�
 
 适配 DSH 0.2.1-rc.1 及兼容版本。
 
-### 从 GitHub 安装
+### 从 Release 安装（推荐，不需要 Git）
+
+直接使用 release 里的 tarball：
+
+```powershell
+dsh plugin --profile desktop add https://github.com/Oxygen-Wang/dsh-cursorlike-sidebar/releases/download/v0.28.0-cursorlike.1/dsh-cursorlike-sidebar-0.28.0-cursorlike.1.tgz
+```
+
+### 从 GitHub 源码安装
+
+需要本机 `git` 在 PATH 上（pnpm 解析 `github:` 规格会调用 git）：
 
 ```powershell
 dsh plugin --profile desktop add github:Oxygen-Wang/dsh-cursorlike-sidebar
