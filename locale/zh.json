@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "CursorLike Sidebar",
+    "description": "CursorLike 右侧边栏：文件树、代码编辑器、文件变动、任务与侧边对话，支持 Ctrl+L 将选中代码或文件添加到对话。"
+  }
+}

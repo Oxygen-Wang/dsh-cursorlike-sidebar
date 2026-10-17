@@ -1,0 +1,17 @@
+upstream/
+upstream.zip
+__pycache__/
+*.tgz
+runtime/
+.test-data/
+.native-smoke/
+node_modules/
+lib/**/*.map
+reference/
+.prototype/
+test-results/
+playwright-report/
+.env
+.env.*
+*.log
+.DS_Store

@@ -1,0 +1,16 @@
+{
+  "id": "dsh-external/dsh-cursorlike-sidebar",
+  "version": "0.28.0-cursorlike.1",
+  "main": "./lib/index.js",
+  "description": "CursorLike Sidebar：嵌入式文件、编辑器、Git 与聊天引用交互",
+  "engines": {
+    "dsh": ">=0.2.1-rc.1"
+  },
+  "contributes": {
+    "tools": [],
+    "skills": []
+  },
+  "client": {
+    "main": "./lib/client-registry.js"
+  }
+}

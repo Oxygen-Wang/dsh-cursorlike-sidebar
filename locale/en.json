@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "CursorLike Sidebar",
+    "description": "Cursor-like right sidebar for DeepSeek Harness: file tree, code editor, changes, tasks and side chat, with Ctrl/Cmd+L to add code or files to the conversation."
+  }
+}
