@@ -12,7 +12,7 @@
 import { t } from './locales.ts'
 
 const ACTION_BAR_ATTR = 'data-cursorlike-diff-actions'
-const PANEL_SELECTOR = '[data-diff-approval-dock]'
+const PANEL_SELECTOR = '[data-diff-approval-dock], [data-diff-approval-panel]'
 const KEEP_SELECTOR = '[data-diff-keep]:not([disabled]), [data-diff-block-keep]:not([disabled]), [data-diff-selection-keep]:not([disabled])'
 const REVERT_SELECTOR = '[data-diff-revert]:not([disabled]), [data-diff-block-revert]:not([disabled]), [data-diff-selection-revert]:not([disabled])'
 
