@@ -1045,6 +1045,7 @@ export function TextEditor(props: FileViewerProps) {
     reviewRef.current = null
     setReview(null)
     setReviewDecision({ review: current, kind: 'keep' })
+    queueMicrotask(() => viewRef.current?.focus())
   }
 
   /** Reject the pending edit: write the previous bytes back, then show it. */
@@ -1058,6 +1059,7 @@ export function TextEditor(props: FileViewerProps) {
       setReview(null)
       setReviewDecision({ review: current, kind: 'reject' })
       replaceEditorText(current.oldText)
+      queueMicrotask(() => viewRef.current?.focus())
     } catch {
       setSaveState('failed')
     }
