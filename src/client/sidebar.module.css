@@ -2666,3 +2666,19 @@ body[data-dsh-sidebar-dragging] .bottomPanel {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* Ctrl/Cmd+wheel tree-icon zoom (Sidebar.tsx sets the variable on the panel
+   host). The row's icon is either a direct <svg> or the primitive's <span>
+   wrapper; both scale, while the row height/name text stay unchanged. */
+[data-dsh-cursorlike-sidebar] [data-cursorlike-path],
+[data-sidebar-right-panel] [data-cursorlike-path] {
+  height: calc(var(--dsh-tree-icon-size, 14px) + 14px);
+}
+
+[data-dsh-cursorlike-sidebar] [data-cursorlike-path] > svg,
+[data-dsh-cursorlike-sidebar] [data-cursorlike-path] > span:first-child > svg,
+[data-sidebar-right-panel] [data-cursorlike-path] > svg,
+[data-sidebar-right-panel] [data-cursorlike-path] > span:first-child > svg {
+  width: var(--dsh-tree-icon-size, 14px);
+  height: var(--dsh-tree-icon-size, 14px);
+}

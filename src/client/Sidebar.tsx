@@ -81,6 +81,27 @@ const osFileDragShield = {
   onDrop: swallowOsFileDrag,
 }
 
+/** Browser-like Ctrl/Cmd+wheel tree-icon zoom (persisted per client). */
+const TREE_ICON_KEY = 'dsh-cursorlike-sidebar:tree-icon-size'
+const TREE_ICON_MIN = 10
+const TREE_ICON_MAX = 32
+const TREE_ICON_DEFAULT = 14
+
+/**
+ * Read the saved tree-icon size. Storage failures (private mode, SSR) fall
+ * back to the default instead of breaking the sidebar.
+ * @returns the clamped pixel size used for file-tree icons.
+ */
+function readTreeIconSize(): number {
+  try {
+    const raw = localStorage.getItem(TREE_ICON_KEY)
+    const value = raw === null ? TREE_ICON_DEFAULT : Number(raw)
+    return Number.isFinite(value) ? Math.min(TREE_ICON_MAX, Math.max(TREE_ICON_MIN, value)) : TREE_ICON_DEFAULT
+  } catch {
+    return TREE_ICON_DEFAULT
+  }
+}
+
 /**
  * Append one user-space stylesheet (preset or custom CSS) as a tagged
  * `<style>` element. The tag attribute carries the source identity so the
@@ -97,6 +118,41 @@ function injectUserCss(attr: string, id: string, cssText: string): HTMLStyleElem
 
 export function Sidebar(props: { ctx: Context; store: SidebarStore }) {
   const { ctx, store } = props
+
+  // Browser-like Ctrl/Cmd+wheel icon zoom: the value lives on the unified
+  // panel host as a CSS variable, so every file-tree row resizes without
+  // touching the per-row icon components. Persisted locally; a page refresh
+  // keeps the chosen size.
+  const [treeIconSize, setTreeIconSize] = useState(readTreeIconSize)
+  useEffect(() => {
+    // The variable lives on <html>, not the plugin host: the Files tree also
+    // renders inside DSH's native right sidebar (a sibling of this host).
+    document.documentElement.style.setProperty('--dsh-tree-icon-size', `${treeIconSize}px`)
+  }, [treeIconSize])
+  useEffect(() => {
+    const onWheel = (event: WheelEvent): void => {
+      if (!event.ctrlKey || event.deltaY === 0) return
+      const target = event.target instanceof Element ? event.target : null
+      if (target === null) return
+      // Only over the file tree, not the editor or the rest of the sidebar:
+      // Ctrl+wheel elsewhere keeps the app/browser's own zoom.
+      const zone = target.closest('[data-dsh-cursorlike-sidebar], [data-sidebar-right-panel]')
+      const tree = target.closest('[data-cursorlike-drop], [data-cursorlike-path]')
+      if (zone === null || tree === null) return
+      event.preventDefault()
+      setTreeIconSize((current) => {
+        const next = Math.min(TREE_ICON_MAX, Math.max(TREE_ICON_MIN, current - Math.sign(event.deltaY) * 2))
+        try {
+          localStorage.setItem(TREE_ICON_KEY, String(next))
+        } catch {
+          /* storage unavailable: keep the in-memory size */
+        }
+        return next
+      })
+    }
+    document.addEventListener('wheel', onWheel, { passive: false, capture: true })
+    return () => document.removeEventListener('wheel', onWheel, true)
+  }, [])
 
   // Copy freshness: re-render the whole tree when the DSH locale switches.
   // The module-level t() reads the active locale at call time, so a root

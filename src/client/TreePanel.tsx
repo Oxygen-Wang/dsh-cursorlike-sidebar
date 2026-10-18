@@ -32,6 +32,7 @@ import type { OpenInApp } from './open-in-app.ts'
 import type { OpenWithTarget } from './open-with.ts'
 import { t } from './locales.ts'
 import { isWithinWorkspace, resolveSidebarPath } from './paths.ts'
+import { IGNORE_FILE, parseIgnoreFile } from './ignore-file.ts'
 import { IconButton } from './ui/index.ts'
 import { UploadOverlay } from './UploadOverlay.tsx'
 import {
@@ -127,6 +128,28 @@ export function TreePanel(props: {
       window.removeEventListener('dsh-sidebar:refresh-files', bump)
     }
   }, [])
+  /**
+   * Per-workspace `.ignore` rules (root file). Read through the ordinary
+   * `fs.read` route — no host change needed — and re-read on the same refresh
+   * tick as the tree, so editing `.ignore` and clicking refresh is enough.
+   * Missing/unreadable files degrade to "no rules" instead of an error: a
+   * `.ignore` file is optional.
+   */
+  const [ignorePatterns, setIgnorePatterns] = useState<string[]>([])
+  useEffect(() => {
+    if (cwd === undefined) {
+      setIgnorePatterns([])
+      return
+    }
+    const controller = new AbortController()
+    api.fsRead({ sessionId, cwd }, resolveSidebarPath(cwd, IGNORE_FILE), controller.signal).then((result) => {
+      if (controller.signal.aborted) return
+      setIgnorePatterns(result.kind === 'text' ? parseIgnoreFile(result.content) : [])
+    }).catch(() => {
+      if (!controller.signal.aborted) setIgnorePatterns([])
+    })
+    return () => controller.abort()
+  }, [sessionId, cwd, refreshTick])
   /** One-line upload status under the search row ('' hides the hint). */
   const [uploadStatus, setUploadStatus] = useState('')
   /** Whether the status line is a failure/cancel (error color, stays visible). */
@@ -187,12 +210,20 @@ export function TreePanel(props: {
 
   const needle = query.trim()
   const searching = needle !== ''
+  /**
+   * The client pref list plus the workspace `.ignore` file. Deduplicated so a
+   * pattern repeated in both sources does not change the host cache key.
+   */
+  const effectiveExclude = useMemo(
+    () => Array.from(new Set([...(exclude ?? []), ...ignorePatterns])),
+    [exclude, ignorePatterns],
+  )
   // The search effect below must re-run on a CHANGED list, never on a churned
   // array identity: the prefs store hands out one stable reference per
   // document, but keying on the value is what makes that a guarantee rather
   // than an assumption (a re-run resets the 300ms debounce, so a per-render
   // identity would keep the search from ever settling).
-  const excludeKey = (exclude ?? []).join('\0')
+  const excludeKey = effectiveExclude.join('\0')
   useEffect(() => {
     if (needle === '') {
       setResults(null)
@@ -389,7 +420,7 @@ export function TreePanel(props: {
         onOpenWith={onOpenWith}
         onToggleOpenWithPin={onToggleOpenWithPin}
         openWithShowPluginTargets={openWithShowPluginTargets}
-        exclude={exclude}
+        exclude={effectiveExclude}
         onReferenceFile={onReferenceFile}
         onPathRenamed={onPathRenamed}
         onPathDeleted={onPathDeleted}
