@@ -26,6 +26,10 @@ jobs:
         run: npm install -g @deepseek-ai/dsh@0.2.1-rc.1
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Configure git identity
+        run: |
+          git config --global user.name "dsh-ci"
+          git config --global user.email "dsh-ci@users.noreply.github.com"
       - name: Typecheck
         run: pnpm typecheck
       - name: Build

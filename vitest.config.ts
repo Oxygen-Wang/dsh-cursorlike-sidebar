@@ -12,6 +12,9 @@
  */
 import { defineConfig } from 'vitest/config'
 
+/** GitHub Actions sets CI=true; keep repository-history smoke out of it. */
+const ci = process.env.CI === 'true'
+
 export default defineConfig({
   test: {
     // Bridge Node's `localStorage` accessor to jsdom's store (see the file).
@@ -61,6 +64,11 @@ export default defineConfig({
       '**/cypress/**',
       '**/.{idea,git,cache,output,temp}/**',
       '**/{karma,rollup,webpack,vite,vitest,jest,ava,babel,nyc,cypress,tsup,build,eslint,prettier}.config.*',
+      // `tests/smoke.spec.ts` asserts THIS repository's own git history. The
+      // committed `lib/` makes the initial commit's `git show` exceed the
+      // host's 8 MiB cap, and the scratch revert/cherry-pick cases need a git
+      // identity. Neither is a plugin unit-test signal; keep the suite local.
+      ...(ci ? ['tests/smoke.spec.ts'] : []),
     ],
   },
 })

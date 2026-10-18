@@ -142,7 +142,19 @@ export function TreePanel(props: {
       return
     }
     const controller = new AbortController()
-    api.fsRead({ sessionId, cwd }, resolveSidebarPath(cwd, IGNORE_FILE), controller.signal).then((result) => {
+    // Older test mocks (and stripped hosts) may not expose the read route:
+    // `.ignore` is optional, so degrade to "no rules" instead of throwing
+    // inside an effect.
+    if (typeof api.fsRead !== 'function') {
+      setIgnorePatterns([])
+      return () => controller.abort()
+    }
+    const request = api.fsRead({ sessionId, cwd }, resolveSidebarPath(cwd, IGNORE_FILE), controller.signal)
+    if (request === undefined || typeof request.then !== 'function') {
+      setIgnorePatterns([])
+      return () => controller.abort()
+    }
+    request.then((result) => {
       if (controller.signal.aborted) return
       setIgnorePatterns(result.kind === 'text' ? parseIgnoreFile(result.content) : [])
     }).catch(() => {
