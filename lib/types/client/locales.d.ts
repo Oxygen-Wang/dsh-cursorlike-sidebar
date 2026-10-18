@@ -178,6 +178,8 @@ export declare const zh: {
     reviewKeep: string;
     reviewReject: string;
     reviewUndo: string;
+    reviewKept: string;
+    reviewRejected: string;
     previewOnlyNotice: string;
     largeFileEmpty: string;
     pagedLineRange: string;
