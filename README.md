@@ -1,26 +1,141 @@
 # CursorLike Sidebar
 
-DSH 桌面端内嵌侧边栏，包名 **`dsh-cursorlike-sidebar`**，项目目录 **`dsh-cursorlike`**。
-基于 [Better Sidebar v0.28.0](https://github.com/omdsh-dev/DSH-better-sidebar) 修改，保留 MIT 许可证。
-本插件是独立的 DeepSeek Harness 插件，与 Cursor / Anysphere 无隶属关系。
+**让 DSH 对话与项目文件在同一工作区协作。**
 
-提供文件树、代码编辑、搜索、Git 差异视图、原生终端、侧边对话和分屏，主题跟随 DSH。
-增加文件树选中文件后 Ctrl+L 添加引用、编辑器选中代码后 Ctrl+L 添加到对话；编辑器里没有选中时 Ctrl+L 添加当前行（与 Cursor 一致），Markdown 预览里选中文本后同样可用。插入格式是 **`@文件 line 12-18`**：原生 `@file` chip + 行号后缀，不再默认塞入整段代码。支持拖动文件引用或选中代码到聊天输入区，拖动文件引用到文件面板打开。
-Agent 修改当前打开的文件后，**最后一个改动行后面**出现“保留 / 撤销”操作条：`Ctrl+K` 保留、`Ctrl+J` 撤销、`Ctrl+Z` 撤销上一步；保留后条消失。
-Markdown 预览选中文字时，会先剥离粗体、列表、行内代码等 Markdown 标记再映射源码行号，因此预览选区也能得到 `@文件 line X-Y`；只有确实无法唯一定位时才退化为 `@文件`，此时会**直接附上选中内容**，而不是只剩一个路径。
-未处理的保留/撤销 diff 会按会话 + 文件保存在本地 localStorage，重启后若文件内容仍是待审版本，操作条会恢复；保留/撤销后清除。
-文件树、图标网格、多列视图里的行都可以拖到工具栏的 `.ignore` 眼睛图标上，自动把该路径追加到根 `.ignore` 并刷新隐藏。
-支持工作区根目录 `.ignore`（gitignore 风格 glob，隐藏文件/文件夹；第一版只读根文件，暂不支持 `!` 反向选择，编辑后点一次刷新）。
-文件树工具栏可切换 **树形 / 桌面图标网格 / Miller 多列**；**桌面图标网格是默认视图**：默认 3 列九宫格，第一行第一列是“返回”，文件夹单击进入，文件单击打开，右键可打开 / 新 Tab / 侧边 / 引用 / 复制路径，拖拽可引用；多列模式点文件夹会在右侧追加一列，多级目录并排。图标网格上按住 `Ctrl` 滚轮可把图标从 24px 放大到 160px，放大到 64px 以上时图片文件直接显示缩略图。
-已安装 `dsh-diff-approval` 时，本插件会把它从旧的浮层默认**一次性迁到 DSH 原生右侧栏 dock**，并把 Keep 动作显示为绿色、Revert 显示为红色；之后你在它的菜单里显式改回 float 会保留你的选择。停靠的 Diff 面板底部还会增加 `保留 Ctrl+K` / `撤销 Ctrl+J` 操作条，快捷键转发到它自己的 Keep/Revert。
-文件树上按 `Ctrl+滚轮` 可放大/缩小图标（10–32px，本地记住），类似桌面浏览器的缩放手势。
-保留 DSH 原有 Ctrl+B 行为。不需要额外桌面软件或 Python 运行时，不包含 PDF 依赖。
+**Browse files, bring code into chat, and review agent edits inside DeepSeek Harness.**
 
-## 安装
+`dsh-cursorlike-sidebar` 是嵌入 DSH 原生右侧栏的工作区插件，提供文件浏览、代码编辑、Markdown 预览、Git 差异、原生终端、侧边对话与分屏，主题随 DSH 切换。
 
-适配 DSH 0.2.1-rc.1 及兼容版本。
+A workspace sidebar for DSH with a file browser, code editor, Markdown preview, Git diffs, native terminal, side chat, and split panes. It follows the DSH theme.
 
-### 从 npm 安装（发布后，自动更新推荐）
+独立 DeepSeek Harness 插件，与 Cursor / Anysphere 无隶属关系。
+
+An independent DeepSeek Harness plugin, unaffiliated with Cursor or Anysphere.
+
+[功能介绍 · Features](#features) · [安装 · Installation](#installation) · [快捷键 · Shortcuts](#shortcuts) · [更新日志](./CHANGELOG.md) · [Changelog](./CHANGELOG_EN.md)
+
+![在 DSH 中选中 Markdown 文本，通过 Ctrl+L 添加带行号的会话引用 / Add selected Markdown text to chat with Ctrl+L](./docs/screenshots/chat-reference.png)
+
+*PPT 演示截图：左侧对话、右侧文件预览，选中文字即可引用。 / Demo from the supplied deck: chat beside a file preview, with selected text ready to reference.*
+
+<a id="features"></a>
+
+## 功能介绍 · Features
+
+### 1. 按习惯浏览文件 · Browse your way
+
+同一个工作区支持三种视图，可从文件面板工具栏切换：
+
+- **桌面图标网格 / Icon grid**：默认视图，三列排列，首格返回上级。单击文件夹进入、单击文件打开，适合直观浏览。
+- **树形列表 / File tree**：展开目录层级，查看项目结构，适合定位源码。
+- **Miller 多列 / Miller columns**：逐级目录并排展开，适合在深层路径间浏览。
+
+Switch between a default icon grid, a hierarchical file tree, and Miller columns without leaving the workspace.
+
+<p align="center">
+  <img src="./docs/screenshots/file-view-1.png" width="32%" alt="桌面图标网格 / Icon grid" />
+  <img src="./docs/screenshots/file-view-3.png" width="32%" alt="树形列表 / File tree" />
+  <img src="./docs/screenshots/file-view-2.png" width="32%" alt="Miller 多列 / Miller columns" />
+</p>
+
+*从左到右：图标网格、树形列表、多列视图。 / Left to right: icon grid, file tree, and Miller columns.*
+
+右键可打开文件、新建 Tab、侧边打开、添加引用或复制路径。支持文件多选、复制/剪切/粘贴、重命名、删除及文件操作历史。网格中按住 `Ctrl` 滚轮可调整图标大小（24–160px），64px 以上的图片图标显示缩略图；树形视图支持 10–32px 图标缩放。
+
+Use context menus and multi-selection to manage files, with clipboard operations and file operation history. Ctrl + mouse wheel adjusts icon size, with image thumbnails in larger grid sizes.
+
+### 2. 把文件和选区带入对话 · Bring context into chat
+
+选中文件或代码后按 **`Ctrl+L`**，即可把相关上下文添加到当前对话，减少复制路径、粘贴代码的步骤。
+
+- 文件浏览器：选中文件后添加文件引用。
+- 代码编辑器：选中代码后添加行范围；没有选区时添加当前行。
+- Markdown 预览：选中文字后映射到源码行号，支持正文中的粗体、列表、行内代码。
+- 拖放：将文件引用或选中代码拖入聊天输入区，也可把文件引用拖到文件面板打开。
+
+Press **Ctrl+L** on a selected file, code selection, or Markdown preview text. References use a native `@file` chip with a line suffix such as `line 12-18`. With no editor selection, the current line is referenced. Drag files or selected code into chat for the same workflow.
+
+引用格式示例：`@src/app.ts line 12-18`。Markdown 预览无法唯一定位源码时，会退化为文件引用并附上选中文字，保留必要上下文。
+
+If a Markdown selection cannot be mapped uniquely to source lines, the reference includes the selected text as a fallback.
+
+### 3. 隐藏无关文件 · Keep the file browser focused
+
+在**工作区根目录**创建 `.ignore`，隐藏依赖、构建产物或日志。也可把文件或文件夹拖到工具栏的 **`.ignore` 眼睛图标**，自动追加规则并刷新。
+
+Create a root-level `.ignore` to hide distracting files, or drag a file or folder onto the ignore icon to append a rule and refresh the browser.
+
+```gitignore
+node_modules
+.cache
+*.log
+```
+
+<details>
+<summary>查看 PPT 中的 .ignore 示例 · View the .ignore demo</summary>
+
+<img src="./docs/screenshots/ignore-files.png" width="600" alt="在编辑器中配置工作区根目录 .ignore / Root-level .ignore configuration" />
+
+</details>
+
+规则使用 gitignore 风格的 glob，当前仅读取根目录 `.ignore`，不支持 `!` 反向选择。手动编辑后点击刷新。隐藏仅影响文件展示，不会删除文件，也不会释放磁盘空间。
+
+Rules use gitignore-style globs. Only the workspace root file is read, and `!` negation is unsupported. Refresh after manual edits. Hiding files affects display only and does not delete them.
+
+### 4. 逐块审查 Agent 修改 · Review agent edits by hunk
+
+Agent 修改当前打开的文件后，编辑器直接显示内联差异：新增或改写行标绿，旧内容以红色删除块显示。按改动块（hunk）逐个**保留 / Keep** 或**撤销 / Revert**，处理后自动跳到下一处，操作条显示进度，也可一次处理全部修改。
+
+The editor highlights agent edits inline, with green additions and red deleted content. Keep or revert individual hunks, move automatically to the next change, or handle all changes at once.
+
+「更改」页支持对本轮 write/edit 操作逐行审查：每个改动行右侧有 ✓ 保留 / ✕ 撤销，当前行高亮；处理完一行自动跳到下一行，一个文件全部处理完后自动切到下一个改动文件。只有能重建完整旧内容、且磁盘仍匹配该操作结果时才启用写回；否则显示只读 diff 与原因。**撤销会立即写回磁盘。**
+
+The Changes tab reviews write/edit operations line by line: every changed line carries ✓ Keep / ✕ Revert, the active line is highlighted, and resolving a line jumps to the next one; finishing a file selects the next changed file. Review actions require a complete previous version and a matching current file. Otherwise, the diff stays read-only with an explanation. **Revert writes to disk immediately.**
+
+未处理的编辑器审查状态按会话与文件保存在本地。重启后，文件仍匹配待审版本时恢复；处理完毕后清除。
+
+Pending editor reviews are saved locally per session and file, and restored after restart when the file still matches the pending version.
+
+### 5. 编辑、终端与分屏 · Edit, run, and compare
+
+代码编辑、Markdown 预览、搜索、Git 差异、原生终端与侧边对话都可在 DSH 中使用。分屏便于并排查看文件和操作结果，减少在外部窗口间切换。
+
+Use editing, previews, search, Git diffs, a native terminal, and side chat inside DSH. Split panes help keep files and results visible together.
+
+安装 `dsh-diff-approval` 时，本插件还提供原生右侧栏 dock 集成与 Keep/Revert 快捷键转发。首次将其旧浮层迁到 dock 后，会保留用户显式改回 float 的选择。
+
+Optional `dsh-diff-approval` integration docks its review panel in the native sidebar and forwards Keep/Revert shortcuts, while respecting a later explicit switch back to floating mode.
+
+<a id="shortcuts"></a>
+
+## 常用快捷键 · Shortcuts
+
+快捷键随焦点生效：文件操作、文本编辑和 Diff 审查各自使用对应上下文。
+
+Shortcuts act on the focused browser, editor, or review surface.
+
+- **`Ctrl+L`**：文件、选区或当前行添加到会话 / Add file, selection, or current line to chat.
+- **`Ctrl+C` / `Ctrl+X` / `Ctrl+V`**：文件浏览器中复制、剪切、粘贴 / Copy, cut, and paste files in the browser.
+- **`Ctrl+Z`**：撤销当前上下文中的操作；审查时撤销上一步决定 / Undo in the active context, including the last review decision.
+- **`Ctrl+Shift+Z` / `Ctrl+Y`**：文件浏览器中重做 / Redo file browser operations.
+- **`F5`**：刷新文件浏览器 / Refresh the file browser.
+- **`Ctrl+K` / `Ctrl+J`**：保留 / 撤销当前改动块（编辑器）或当前改动行（更改页）/ Keep or revert the active hunk (editor) or line (Changes tab).
+- **`Ctrl+Alt+K` / `Ctrl+Alt+J`**：全部保留 / 全部撤销 / Keep or revert all changes.
+- **`Ctrl+滚轮 / mouse wheel`**：调整文件图标大小 / Resize file icons.
+
+保留 DSH 原有 `Ctrl+B` 行为，无需额外桌面软件或 Python 运行时，不包含 PDF 依赖。
+
+The plugin preserves DSH's existing Ctrl+B behavior and requires no additional desktop app or Python runtime. It does not bundle PDF dependencies.
+
+<a id="installation"></a>
+
+## 安装 · Installation
+
+适配 DSH 0.2.1-rc.1 及兼容版本。安装前停用原版 `dsh-better-sidebar`，安装或更新后完全退出并重启 DSH。
+
+Requires DSH 0.2.1-rc.1 or a compatible version. Disable the original `dsh-better-sidebar` before installing, then fully restart DSH after installation or updates.
+
+### npm（发布后可用 · After publication）
 
 插件发布到 npm 后可安装包名：
 
@@ -30,15 +145,17 @@ dsh plugin --profile desktop add dsh-cursorlike-sidebar
 
 只有 npm / GitHub 来源能被 DSH Plugin Market 检查更新；本地 `link:` 安装和固定 tag 的 tarball 不会自动更新。
 
-### 从 Release 安装（不需要 Git）
+### Release（不需要 Git · No Git required）
 
-直接使用 release 里的 tarball：
+以下为固定的历史版本 `0.28.0-cursorlike.1`，不代表当前工作区版本。其他版本请在 [Releases](https://github.com/Oxygen-Wang/dsh-cursorlike-sidebar/releases) 选择对应资源。
+
+The command below installs the pinned historical release, not the current workspace version.
 
 ```powershell
 dsh plugin --profile desktop add https://github.com/Oxygen-Wang/dsh-cursorlike-sidebar/releases/download/v0.28.0-cursorlike.1/dsh-cursorlike-sidebar-0.28.0-cursorlike.1.tgz
 ```
 
-### 从 GitHub 源码安装
+### GitHub（需要 Git · Requires Git）
 
 需要本机 `git` 在 PATH 上（pnpm 解析 `github:` 规格会调用 git）：
 
@@ -49,7 +166,7 @@ dsh plugin --profile desktop add github:Oxygen-Wang/dsh-cursorlike-sidebar
 也可以在 DSH 的「添加插件」里填入上面的 GitHub 规格，安装后重启 DSH。
 仓库已提交构建好的 `lib/`（不含 source map），因此 GitHub 安装不需要本地构建。
 
-### 本地开发安装
+### 本地开发 · Local development
 
 插件已经以 `link:` 方式安装时，不需要每次重装。依赖只需装一次：
 
@@ -74,7 +191,7 @@ npm run dev
 安装或更新后需要重启 DSH，插件才会在原生右侧栏中挂载。
 通过 DSH 原生右侧栏入口使用。
 
-## 自动更新
+## 更新方式 · Updates
 
 DSH 的 **Plugin Market** 会为已安装插件做更新检查：
 
@@ -92,7 +209,7 @@ npm publish --access public --tag latest
 
 发布后在 DSH「设置 → Plugin Market → 已安装」里检查更新；市场只自动**检查**，应用更新需要点一次 Update（不会静默替换代码）。
 
-## 开发与来源
+## 开发与来源 · Development & credits
 
 ```powershell
 pnpm typecheck
@@ -101,5 +218,7 @@ pnpm pack
 ```
 
 `reference/` 为研究源码，`.prototype/` 为早期原型，两者不进入安装包。
-另参考 [dsh-diff-approval v0.35.0](https://github.com/9087/dsh-diff-approval) 的改动审查交互；其逐块保留/回退实现尚未合并，当前使用上游的 Git 差异视图。
+改动审查交互另参考 [dsh-diff-approval v0.35.0](https://github.com/9087/dsh-diff-approval)。当前分支已实现编辑器与「更改」页的逐块保留/撤销。
+
+Based on [Better Sidebar v0.28.0](https://github.com/omdsh-dev/DSH-better-sidebar), with review interaction references from dsh-diff-approval. Distributed under the [MIT license](./LICENSE). See [third-party notices](./THIRD_PARTY_NOTICES.md).
 构建和自动化测试不能替代真实 DSH 桌面端的安装、拖放验证。
