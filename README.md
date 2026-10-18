@@ -14,7 +14,17 @@ DSH 桌面端内嵌侧边栏，包名 **`dsh-cursorlike-sidebar`**，项目目�
 
 适配 DSH 0.2.1-rc.1 及兼容版本。
 
-### 从 Release 安装（推荐，不需要 Git）
+### 从 npm 安装（发布后，自动更新推荐）
+
+插件发布到 npm 后可安装包名：
+
+```powershell
+dsh plugin --profile desktop add dsh-cursorlike-sidebar
+```
+
+只有 npm / GitHub 来源能被 DSH Plugin Market 检查更新；本地 `link:` 安装和固定 tag 的 tarball 不会自动更新。
+
+### 从 Release 安装（不需要 Git）
 
 直接使用 release 里的 tarball：
 
@@ -44,6 +54,24 @@ pnpm build
 先停用原版 `dsh-better-sidebar`：本分支保留其内部服务和路由，二者不能同时启用。
 安装或更新后需要重启 DSH，插件才会在原生右侧栏中挂载。
 通过 DSH 原生右侧栏入口使用。
+
+## 自动更新
+
+DSH 的 **Plugin Market** 会为已安装插件做更新检查：
+
+- **npm 安装**：比较已安装版本与 npm `latest`，有一键 Update / Update all；
+- **GitHub 安装**：比较 git HEAD 与版本；只有版本前进（发版/改版本号）才提供更新，普通 commit 只显示“有新提交（未发版）”；
+- **本地 `link:`**：不会自动更新——它始终使用目录里的 `lib`，改完执行 `pnpm build` 后刷新页面即可；
+- **固定 tag 的 tarball**：不会自动更新，需要重新安装新 tarball。
+
+所以给最终用户用时，推荐发布到 npm：
+
+```powershell
+npm login
+npm publish --access public --tag latest
+```
+
+发布后在 DSH「设置 → Plugin Market → 已安装」里检查更新；市场只自动**检查**，应用更新需要点一次 Update（不会静默替换代码）。
 
 ## 开发与来源
 

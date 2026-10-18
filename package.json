@@ -231,7 +231,7 @@
     "zustand": "~4.4.7"
   },
   "icon": "./icon.svg",
-  "private": true,
+  "private": false,
   "upstream": {
     "betterSidebar": "https://github.com/omdsh-dev/DSH-better-sidebar",
     "version": "0.28.0",
