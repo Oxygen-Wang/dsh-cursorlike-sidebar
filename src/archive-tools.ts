@@ -31,7 +31,9 @@
  * and `search-engines` use.
  */
 import { spawn } from 'node:child_process'
-import { dirname, relative, sep } from 'node:path'
+import { mkdtempSync, rm, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join, relative, sep } from 'node:path'
 import { SidebarError } from './wire.ts'
 
 /** The archive tool actually in use. */
@@ -65,6 +67,9 @@ const TOOL_ORDER: readonly ArchiveTool[] = ['zip', 'tar']
 /** How long one availability probe may take before the tool counts as absent. */
 const PROBE_TIMEOUT_MS = 3000
 
+/** The single file the availability probe packs (see {@link probeTool}). */
+const PROBE_FILE = 'probe.txt'
+
 /** How much stderr is kept for the failure message (tail, not head). */
 export const ARCHIVE_STDERR_LIMIT = 4096
 
@@ -81,31 +86,43 @@ export interface ArchivePlan {
 }
 
 /**
- * Whether one candidate binary actually runs.
+ * Whether one candidate binary actually runs — AND accepts the flags it will
+ * really be handed.
  *
- * `--version` rather than `--help`: Info-ZIP's `zip -h` is fine but bsdtar's
- * help exits non-zero on some builds, and a tool that cannot answer
- * `--version` is not one worth handing a user's directory to.
+ * `--version` alone is not enough. TeX Live ships an Info-ZIP `zip` 3.0 that
+ * answers `--version` and then rejects `-y` ("Invalid command arguments",
+ * exit 16), so the download lands as a 73-byte error stub instead of an
+ * archive. The probe therefore packs a one-file scratch tree with the tool's
+ * REAL flags and requires exit 0: a binary that cannot run the invocation is
+ * not one worth handing a user's directory to. (`--version` rather than
+ * `--help` for the same reason bsdtar's help exits non-zero on some builds —
+ * but a version answer alone never qualified a tool.)
  */
-function probeTool(bin: string, spawner: ArchiveSpawn): Promise<boolean> {
+function probeTool(spec: ArchiveToolSpec, spawner: ArchiveSpawn): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
     let settled = false
+    let timer: ReturnType<typeof setTimeout> | undefined = undefined
     const finish = (ok: boolean): void => {
       if (settled) return
       settled = true
       clearTimeout(timer)
+      // A killed Windows child may still hold its cwd briefly. Cleanup must
+      // neither throw from an event handler nor prevent tool fallback.
+      if (scratch !== undefined) rm(scratch, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }, () => {})
       resolve(ok)
     }
     let child: ReturnType<ArchiveSpawn>
+    let scratch: string | undefined
     try {
-      child = spawner(bin, ['--version'], { stdio: 'ignore', windowsHide: true })
+      scratch = mkdtempSync(join(tmpdir(), 'dsh-archive-probe-'))
+      writeFileSync(join(scratch, PROBE_FILE), 'probe\n')
+      child = spawner(spec.bin, [...spec.flags, '.'], { stdio: 'ignore', windowsHide: true, cwd: scratch })
     } catch {
       finish(false)
       return
     }
-    const timer = setTimeout(() => {
-      child.kill()
-      finish(false)
+    timer = setTimeout(() => {
+      try { child.kill() } finally { finish(false) }
     }, PROBE_TIMEOUT_MS)
     child.once('error', () => { finish(false) })
     child.once('exit', (code) => { finish(code === 0) })
@@ -143,7 +160,7 @@ export async function tryTools(
     const spec = TOOL_SPECS[tool]
     let pending = availability.get(tool)
     if (pending === undefined) {
-      pending = probeTool(spec.bin, spawner).then(ok => (ok ? spec : undefined))
+      pending = probeTool(spec, spawner).then(ok => (ok ? spec : undefined))
       availability.set(tool, pending)
     }
     // Sequential on purpose: the tools are tried in preference order, and a

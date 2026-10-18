@@ -174,6 +174,13 @@ export function FileGrid(props: FileBrowserActionsProps & {
     return mediaUrl(scope, entry.path)
   }
 
+  // No session: the same "pick a conversation" hint the tree view shows. The
+  // grid is the DEFAULT Files view, so without this the panel renders an empty
+  // grid with a dead "Parent directory" tile instead of the hint.
+  if (cwd === undefined) {
+    return <div className={css.explorerEmpty}>{t('noSession')}</div>
+  }
+
   return (
     <div className={css.fileGridRoot} ref={rootRef} tabIndex={0} onKeyDown={onKeyDown} data-cursorlike-file-grid=""
       data-cursorlike-drop-dir={currentDir}

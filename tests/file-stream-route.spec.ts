@@ -24,6 +24,7 @@ import { apply } from '../src/index.ts'
 import { writeError, writeJson } from '../src/wire.ts'
 import type { SidebarWebRoute } from '../src/context-types.ts'
 import { removeTree } from './temp-tree.ts'
+import { canSymlink } from './symlink-probe.ts'
 
 interface FakeContext {
   connection: { requestRejection: () => undefined }
@@ -238,7 +239,7 @@ describe('/sidebar/html streams without a size cap', () => {
     await response.body!.cancel()
   })
 
-  it('serves a file reached through a symlink', async () => {
+  it.skipIf(!canSymlink)('serves a file reached through a symlink', async () => {
     const ws = workspace('html-link')
     const real = join(ws, 'real.css')
     writeFileSync(real, 'body { color: red }\n')

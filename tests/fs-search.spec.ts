@@ -22,22 +22,7 @@ import { searchFiles, searchFilesPlain } from '../src/fs-search.ts'
 import type { EngineProbe } from '../src/search-engines.ts'
 import { resetEngines, setEngineHooks } from '../src/search-engines.ts'
 import { removeTree } from './temp-tree.ts'
-
-/**
- * Symlink creation needs extra privileges on Windows; the symlink case skips
- * there rather than fails (mirror of the fs-tree symlink spec).
- */
-const canSymlink = (() => {
-  const dir = mkdtempSync(join(tmpdir(), 'dsh-sidebar-search-probe-'))
-  try {
-    symlinkSync('target', join(dir, 'link'))
-    return true
-  } catch {
-    return false
-  } finally {
-    removeTree(dir)
-  }
-})()
+import { canSymlink } from './symlink-probe.ts'
 
 /**
  * A file NAMED `back\slash.ts` (the backslash is part of the name, not a

@@ -4,22 +4,10 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { renameWorkspaceEntry, removeWorkspaceEntry, mkdirWorkspaceEntry, writeWorkspaceUpload } from '../src/fs-operations.ts'
 import { removeTree } from './temp-tree.ts'
+import { canSymlink } from './symlink-probe.ts'
 
 /** The test workspace root (each suite gets its own temp tree). */
 const root = mkdtempSync(join(tmpdir(), 'dsh-sidebar-upload-'))
-
-/** Symlink creation needs privileges on Windows; the link cases skip there. */
-const canSymlink = (() => {
-  const dir = mkdtempSync(join(tmpdir(), 'dsh-sidebar-upload-probe-'))
-  try {
-    symlinkSync(dir, join(dir, 'probe-link'))
-    return true
-  } catch {
-    return false
-  } finally {
-    removeTree(dir)
-  }
-})()
 
 afterAll(() => {
   removeTree(root)
@@ -268,7 +256,7 @@ describe('renameWorkspaceEntry', () => {
       .rejects.toMatchObject({ code: 'fs-error' })
   })
 
-  it('renames a symlink ROW, not its target', async () => {
+  it.runIf(canSymlink)('renames a symlink ROW, not its target', async () => {
     writeFileSync(join(root, 'target.txt'), 't')
     symlinkSync(join(root, 'target.txt'), join(root, 'alias.txt'))
     await renameWorkspaceEntry({ cwd: root, path: join(root, 'alias.txt'), name: 'alias2.txt' })
@@ -292,7 +280,7 @@ describe('removeWorkspaceEntry', () => {
     expect(existsSync(join(root, 'tree'))).toBe(false)
   })
 
-  it('unlinks a symlink row without touching (or recursing into) its target', async () => {
+  it.runIf(canSymlink)('unlinks a symlink row without touching (or recursing into) its target', async () => {
     mkdirSync(join(root, 'realdir'), { recursive: true })
     writeFileSync(join(root, 'realdir/keep.txt'), 'x')
     symlinkSync(join(root, 'realdir'), join(root, 'linkdir'))

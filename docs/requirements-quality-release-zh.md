@@ -61,3 +61,16 @@
 - [x] 本轮产物在 `.test-data/reference-fixes-build` 打包，source map 路径重定位后原子安装到 `lib`，7 个 JavaScript 文件与构建结果逐一哈希一致。旧产物保留于 `.test-data/reference-installed-previous-*`。
 
 - [x] 原地 tsdown 曾遇到 editor/mermaid chunk 被映射使用（Windows 1224）。改在 `.test-data/undo-build` 完整构建，重定位 source map 后用 File.Replace 原子安装到 lib，旧产物保留于忽略目录；7 个 JavaScript 产物逐一哈希核对通过。未结束占用文件的进程。
+
+## 2026-10-19 门禁复查
+
+- [x] 核对并验证现有修复：ESLint 排除 `.test-data/` 与 `release/`；全仓 `eslint .` 完成且无报错。
+- [x] 核对并验证 FileGrid 无会话提示及 EditorHost 的 grid API mock；编辑器宿主测试通过。
+- [x] 归档工具同步启动失败时正确尝试备用工具：新增测试先复现 `Cannot access 'timer' before initialization`，修复后通过；临时目录改为带重试的异步清理，避免 Windows 句柄占用导致探测无法结束。
+- [x] `fs-mkdir` 的符号链接测试使用共享 `lstat` 能力探针；本机无法创建链接时明确跳过。
+- [x] CSS Modules 导出键排序，避免哈希表遍历顺序污染构建差异；两次隔离构建的全部 7 个 JavaScript 产物 SHA256 一致。
+- [x] `tsc --noEmit` 通过；归档、mkdir、编辑器宿主定向回归共 44 通过、1 跳过。
+- [ ] 在支持符号链接的环境执行被跳过的用例；本机跳过不代表对应功能已验收。
+- [x] 串行主测试（排除两份打包 spec）运行 310.89 秒：237 文件通过、2 文件跳过、1 文件失败；2850 项通过、21 项跳过、1 项失败。唯一失败是进程启动时已收集的旧 `fs-mkdir` 无守卫链接用例；补守卫后的定向复验见上，未再次运行完整主套件，因此不将此记录写成“全量全绿”。本轮未复现 Git/e2e 并发超时。
+- [x] 两份打包 spec 单独运行：2 文件、12 项通过。使用当前已有 pnpm，本次测试进程设置 `npm_config_ignore_scripts=true`，验证包内容与市场清单而不触发 prepack 清空 `lib`；声明生成和隔离构建另行通过，不替代发布生命周期验收。
+- [ ] 在干净环境验证完整发布生命周期及宿主安装。本轮未发布、未替换安装包；保留用户已有 `lib` 改动与未跟踪文件，未执行全局 corepack 配置。

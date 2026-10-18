@@ -24,6 +24,10 @@ export default tseslint.config(
       'node_modules/',
       '.worktrees/',
       '.delta/',
+      // 端到端夹具目录（631MB / 196 文件，含解包出来的第三方 lib）与发布产物
+      // 同样不是源码：漏掉它们时 `eslint .` 会扫几分钟不结束，门禁等于失效。
+      '.test-data/',
+      'release/',
     ],
   },
 

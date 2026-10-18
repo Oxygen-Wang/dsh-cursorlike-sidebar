@@ -45,10 +45,11 @@ import {
 } from '../src/archive-tools.ts'
 import { SidebarError } from '../src/wire.ts'
 import { removeTree } from './temp-tree.ts'
+import { canSymlink } from './symlink-probe.ts'
 
 /** What one scripted child answers, per phase. */
 interface Script {
-  /** `--version` probe: the exit code, a spawn error, or no answer at all. */
+  /** Availability probe (the real flags over a scratch tree): the exit code, a spawn error, or no answer at all. */
   probe?: (bin: string) => number | 'error' | 'hang'
   /** The real invocation (the one handed the output descriptor). */
   run?: () => RunAnswer
@@ -277,6 +278,15 @@ describe('archiveFileName', () => {
 })
 
 describe('tool probing (injected spawn)', () => {
+  it('falls back when spawning the preferred tool throws synchronously', async () => {
+    const fallback = scriptedSpawn({})
+    const spawner = ((...args: Parameters<ArchiveSpawn>) => {
+      if (args[0] === 'zip') throw new Error('spawn denied')
+      return fallback.spawner(...args)
+    }) as ArchiveSpawn
+    await expect(tryTools(['zip', 'tar'], spawner)).resolves.toMatchObject({ tool: 'tar' })
+  })
+
   it('takes zip when zip answers exit 0 — tar is never spawned', async () => {
     const { spawner, calls } = scriptedSpawn({ probe: () => 0 })
     const spec = await tryTools(['zip', 'tar'], spawner)
@@ -284,9 +294,11 @@ describe('tool probing (injected spawn)', () => {
     expect(spec?.bin).toBe('zip')
     expect(spec?.ext).toBe('.zip')
     expect(spec?.flags).toEqual(['-r', '-q', '-X', '-y', '-'])
-    // `--version`, not `--help`: bsdtar's help exits non-zero on some builds.
+    // The probe packs a one-file scratch tree with the tool's REAL flags, not
+    // `--version`: TeX Live's Info-ZIP answers `--version` and then rejects
+    // `-y`, which would hand the user a 73-byte error stub instead of a zip.
     expect(calls).toHaveLength(1)
-    expect(calls[0]).toMatchObject({ bin: 'zip', args: ['--version'], stdio: 'ignore' })
+    expect(calls[0]).toMatchObject({ bin: 'zip', args: ['-r', '-q', '-X', '-y', '-', '.'], stdio: 'ignore' })
   })
 
   it('falls through to tar when zip cannot be started at all', async () => {
@@ -455,16 +467,18 @@ describe('real tool (only when one is installed)', () => {
       mkdirSync(join(ws, 'dir'), { recursive: true })
       writeFileSync(join(ws, 'a.txt'), 'a\n')
       writeFileSync(join(ws, 'dir', 'b.txt'), 'b\n')
-      // `loop -> .` is the shape that made `-y` mandatory. Creating a symlink
-      // needs a privilege Windows may not grant, so a failure only drops the
-      // loop, not the case.
-      let looped = false
-      try {
-        symlinkSync('.', join(ws, 'loop'), 'dir')
-        looped = true
-      } catch {
-        looped = false
-      }
+      // `loop -> .` is the shape that made `-y` mandatory. A host that cannot
+      // really create links (no privilege, or a filesystem that swallows the
+      // call) drops the loop, not the case — `canSymlink` verifies with lstat
+      // rather than trusting `symlinkSync`'s exit.
+      const looped = canSymlink && (() => {
+        try {
+          symlinkSync('.', join(ws, 'loop'), 'dir')
+          return true
+        } catch {
+          return false
+        }
+      })()
       const plan = planArchive([ws], spec)
       const out = join(root, `out${spec.ext}`)
       const fd = openSync(out, 'w')

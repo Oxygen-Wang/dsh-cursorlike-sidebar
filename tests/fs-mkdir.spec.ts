@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { mkdirWorkspaceEntry } from '../src/fs-operations.ts'
+import { canSymlink } from './symlink-probe.ts'
 
 let root: string
 
@@ -73,7 +74,7 @@ describe('mkdirWorkspaceEntry', () => {
     }
   })
 
-  it('creates INSIDE a symlink that points outside the workspace', async () => {
+  it.skipIf(!canSymlink)('creates INSIDE a symlink that points outside the workspace', async () => {
     const outside = await mkdtemp(join(tmpdir(), 'dsh-link-'))
     try {
       await symlink(outside, join(root, 'escape'))

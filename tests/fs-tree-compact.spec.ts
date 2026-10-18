@@ -11,19 +11,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { listDirectory } from '../src/fs-tree.ts'
 import { removeTree } from './temp-tree.ts'
-
-/** Mirror of the symlink spec's capability probe (symlinks need privileges on Windows). */
-const canSymlink = (() => {
-  const dir = mkdtempSync(join(tmpdir(), 'dsh-sidebar-compact-probe-'))
-  try {
-    symlinkSync('target', join(dir, 'link'))
-    return true
-  } catch {
-    return false
-  } finally {
-    removeTree(dir)
-  }
-})()
+import { canSymlink } from './symlink-probe.ts'
 
 /** A scratch level covering every compact/not-compact shape. */
 function makeFixture(): string {

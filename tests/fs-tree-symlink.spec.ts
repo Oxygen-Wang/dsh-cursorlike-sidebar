@@ -10,22 +10,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { listDirectory } from '../src/fs-tree.ts'
 import { removeTree } from './temp-tree.ts'
-
-/**
- * Symlink creation needs extra privileges on Windows; skip the suite there
- * rather than fail (mirror of the smoke spec's platform-tolerant fixtures).
- */
-const canSymlink = (() => {
-  const dir = mkdtempSync(join(tmpdir(), 'dsh-sidebar-symlink-probe-'))
-  try {
-    symlinkSync('target', join(dir, 'link'))
-    return true
-  } catch {
-    return false
-  } finally {
-    removeTree(dir)
-  }
-})()
+import { canSymlink } from './symlink-probe.ts'
 
 /** A scratch level with real entries plus three symlinks (dir/file/dangling). */
 function makeFixture(): string {

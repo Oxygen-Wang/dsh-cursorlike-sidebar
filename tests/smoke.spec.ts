@@ -19,6 +19,7 @@ import * as git from '../src/git.ts'
 import { listDirectory } from '../src/fs-tree.ts'
 import type { SidebarWebRoute, SidebarWebUpgradeRoute } from '../src/context-types.ts'
 import { removeTree } from './temp-tree.ts'
+import { canSymlink as canCreateSymlink } from './symlink-probe.ts'
 
 /**
  * The probe-budget factory is spied on so a batch's gate SHARING is asserted
@@ -38,20 +39,6 @@ vi.mock('../src/fs-tree.ts', async (importOriginal) => {
     },
   }
 })
-
-/** Symlink creation may require elevated privileges on Windows. */
-const canCreateSymlink = (() => {
-  const dir = mkdtempSync(join(tmpdir(), 'dsh-sidebar-security-probe-'))
-  try {
-    mkdirSync(join(dir, 'target'))
-    symlinkSync(join(dir, 'target'), join(dir, 'link'))
-    return true
-  } catch {
-    return false
-  } finally {
-    removeTree(dir)
-  }
-})()
 
 interface FakeContext {
   connection: { requestRejection: () => undefined }

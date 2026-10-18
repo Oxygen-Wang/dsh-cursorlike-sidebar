@@ -76,6 +76,14 @@ vi.mock('../src/client/api.ts', () => ({
       answers.landedAt.push(Date.now())
       return answer
     },
+    // The grid view (the default Files view) lists ONE level per call.
+    fsTree: async (_scope: unknown, _path: string) => ({
+      entries: [
+        { name: 'sub', path: '/tmp/sub', isDir: true },
+        { name: 'a.ts', path: '/tmp/a.ts', isDir: false },
+      ],
+      truncated: false,
+    }),
     // The shared git-status store polls this; a non-repo answer keeps rows plain.
     gitStatus: async () => ({ isRepo: false, entries: [] }),
     archiveBuild: async () => ({ id: 'ar-1', entries: 1 }),
@@ -289,6 +297,9 @@ async function mountHostWithTreeWithCwd(ctx: Context, store: ReturnType<typeof c
   const container = document.createElement('div')
   document.body.append(container)
   const root = createRoot(container)
+  // These cases drive the TREE's context menu (rows carry `explorerName`),
+  // but the grid is the default Files view — pin the tree for the mount.
+  localStorage.setItem('dsh-cursorlike-sidebar:files-view', 'tree')
   await act(async () => {
     root.render(createElement(EditorHost, {
       ctx,
@@ -728,6 +739,9 @@ describe('EditorHost native-tab context-menu actions', { timeout: 120_000 }, () 
     const container = document.createElement('div')
     document.body.append(container)
     const root = createRoot(container)
+    // These cases drive the TREE's context menu (rows carry `explorerName`),
+    // but the grid is the default Files view — pin the tree for the mount.
+    localStorage.setItem('dsh-cursorlike-sidebar:files-view', 'tree')
     // The tab record the native seat hands the component: an editor window for
     // /tmp/a.ts whose id never enters the plugin's own layout.
     const nativeTab: SidebarTab = {
