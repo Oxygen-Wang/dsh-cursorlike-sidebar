@@ -45,10 +45,23 @@ dsh plugin --profile desktop add github:Oxygen-Wang/dsh-cursorlike-sidebar
 
 ### 本地开发安装
 
+插件已经以 `link:` 方式安装时，不需要每次重装。依赖只需装一次：
+
 ```powershell
-pnpm install --ignore-scripts --frozen-lockfile
-pnpm build
+npm install
 ```
+
+启动监听（`tsdown --watch`，不需要 pnpm 在 PATH 上）：
+
+```powershell
+npm run dev
+# 或： pwsh -File scripts/dev.ps1
+```
+
+- 改客户端代码：保存后按 `Ctrl+R` 刷新 DSH 页面；
+- 改 Host 代码（`src/index.ts`、`src/*.ts`）：需要完全重启 DSH；
+- 一次性构建：`npm run build`
+- 类型检查：`npm run typecheck`
 
 在 DSH「添加插件」里选择本地目录 `dsh-cursorlike`。
 先停用原版 `dsh-better-sidebar`：本分支保留其内部服务和路由，二者不能同时启用。
@@ -61,7 +74,7 @@ DSH 的 **Plugin Market** 会为已安装插件做更新检查：
 
 - **npm 安装**：比较已安装版本与 npm `latest`，有一键 Update / Update all；
 - **GitHub 安装**：比较 git HEAD 与版本；只有版本前进（发版/改版本号）才提供更新，普通 commit 只显示“有新提交（未发版）”；
-- **本地 `link:`**：不会自动更新——它始终使用目录里的 `lib`，改完执行 `pnpm build` 后刷新页面即可；
+- **本地 `link:`**：不会自动更新——它始终使用目录里的 `lib`，改完执行 `npm run build` 后刷新页面即可；
 - **固定 tag 的 tarball**：不会自动更新，需要重新安装新 tarball。
 
 所以给最终用户用时，推荐发布到 npm：

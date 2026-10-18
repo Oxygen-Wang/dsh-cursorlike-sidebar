@@ -82,6 +82,8 @@
     "typecheck": "tsc --noEmit",
     "bundle": "tsdown",
     "watch": "tsdown --watch",
+    "dev": "tsdown --watch",
+    "dev:types": "tsc -p tsconfig.build.json --watch",
     "test": "vitest run",
     "test:windows": "vitest run --maxWorkers=1",
     "test:mount": "bash scripts/e2e-mount.sh",
