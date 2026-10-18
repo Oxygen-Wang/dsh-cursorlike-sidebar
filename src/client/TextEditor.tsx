@@ -279,6 +279,9 @@ export function TextEditor(props: FileViewerProps) {
   const [review, setReview] = useState<EditorReview | null>(null)
   const [reviewDecision, setReviewDecision] = useState<ReviewDecision | null>(null)
   const reviewRef = useRef<EditorReview | null>(null)
+  /** True while a reject/undo write is in flight (a double click must not
+   *  issue a second write against the same mtime). */
+  const reviewWriteRef = useRef(false)
   const reviewBarRef = useRef<HTMLDivElement>(null)
   /** Content/path seen by the last render, for agent-edit detection. */
   const previousContentRef = useRef<{ path: string; text: string | undefined }>({ path, text: content })
@@ -1175,7 +1178,8 @@ export function TextEditor(props: FileViewerProps) {
   /** Reject the pending edit: write the previous bytes back, then show it. */
   const rejectReview = async (): Promise<void> => {
     const current = reviewRef.current
-    if (current === null || dirtyRef.current) return
+    if (current === null || dirtyRef.current || reviewWriteRef.current) return
+    reviewWriteRef.current = true
     try {
       const result = await api.fsWrite(scope, path, current.oldText, mtimeRef.current)
       if (typeof result.mtimeMs === 'number') mtimeRef.current = result.mtimeMs
@@ -1189,13 +1193,15 @@ export function TextEditor(props: FileViewerProps) {
       queueMicrotask(() => viewRef.current?.focus())
     } catch {
       setSaveState('failed')
+    } finally {
+      reviewWriteRef.current = false
     }
   }
 
   /** Undo the last keep/reject: restore the review bar and (for reject) bytes. */
   const undoReview = async (): Promise<void> => {
     const decision = reviewDecision
-    if (decision === null || dirtyRef.current) return
+    if (decision === null || dirtyRef.current || reviewWriteRef.current) return
     if (decision.kind === 'keep') {
       setReviewDecision(null)
       reviewRef.current = decision.review
@@ -1204,6 +1210,7 @@ export function TextEditor(props: FileViewerProps) {
       queueMicrotask(() => viewRef.current?.focus())
       return
     }
+    reviewWriteRef.current = true
     try {
       const result = await api.fsWrite(scope, path, decision.review.newText, mtimeRef.current)
       if (typeof result.mtimeMs === 'number') mtimeRef.current = result.mtimeMs
@@ -1215,6 +1222,8 @@ export function TextEditor(props: FileViewerProps) {
       queueMicrotask(() => viewRef.current?.focus())
     } catch {
       setSaveState('failed')
+    } finally {
+      reviewWriteRef.current = false
     }
   }
 
@@ -1238,6 +1247,9 @@ export function TextEditor(props: FileViewerProps) {
         onReject: () => { void rejectReview() },
       }),
     })
+    // The handlers close over the live refs; including their per-render
+    // identities would re-dispatch this effect on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [review, content, dirty])
 
   // Ctrl/Cmd+K keeps, Ctrl/Cmd+J rejects, Ctrl/Cmd+Z undoes the last decision.

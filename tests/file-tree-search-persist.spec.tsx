@@ -61,7 +61,7 @@ interface Harness {
 
 function mountPanel(overrides: Partial<ComponentProps<typeof TreePanel>> = {}): Harness {
   localStorage.setItem('dsh-cursorlike-sidebar:files-view', 'tree')
-  localStorage.setItem('dsh-cursorlike-sidebar:files-view-v2', '1')
+  localStorage.setItem('dsh-cursorlike-sidebar:files-view-v3', '1')
   const container = document.createElement('div')
   document.body.append(container)
   const root: Root = createRoot(container)

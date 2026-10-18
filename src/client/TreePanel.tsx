@@ -46,7 +46,7 @@ import css from './sidebar.module.css'
 /** Files view preference (tree, desktop icon grid, or Miller columns). */
 type FilesView = 'tree' | 'grid' | 'columns'
 const FILES_VIEW_KEY = 'dsh-cursorlike-sidebar:files-view'
-const FILES_VIEW_MIGRATION_KEY = 'dsh-cursorlike-sidebar:files-view-v2'
+const FILES_VIEW_MIGRATION_KEY = 'dsh-cursorlike-sidebar:files-view-v3'
 const FILES_ICON_KEY = 'dsh-cursorlike-sidebar:files-icon-size'
 const FILES_ICON_DEFAULT = 48
 const FILES_ICON_MIN = 24
