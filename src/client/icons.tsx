@@ -140,3 +140,12 @@ export const IconColumnsOutline16 = ({ size = 16, className }: IconProps) => (
     <rect x="10.9" y="2.5" width="3.6" height="11" rx="1" stroke="currentColor" strokeWidth="1.4" />
   </svg>
 )
+
+/** Eye with a slash: drop a tree row here to add it to the root `.ignore`. */
+export const IconEyeOffOutline16 = ({ size = 16, className }: IconProps) => (
+  <svg width={size} height={size} className={className} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path d="M1.8 8s2.2-3.7 6.2-3.7S14.2 8 14.2 8s-2.2 3.7-6.2 3.7S1.8 8 1.8 8Z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+    <circle cx="8" cy="8" r="1.8" stroke="currentColor" strokeWidth="1.4" />
+    <path d="m2.5 2.5 11 11" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+  </svg>
+)

@@ -31,3 +31,18 @@ export function parseIgnoreFile(content: string): string[] {
   }
   return patterns
 }
+
+/**
+ * Append newly dropped workspace paths to a root `.ignore` text, keeping the
+ * existing lines/comments and avoiding duplicates. The result always ends in
+ * a newline so a later append starts on its own line.
+ * @param content - the current file ('' when it does not exist).
+ * @param patterns - workspace-relative positive patterns to add.
+ * @returns the next file text, or the same text when nothing was added.
+ */
+export function appendIgnorePatterns(content: string, patterns: readonly string[]): string {
+  const lines = content.split(/\r?\n/u).filter(line => line.trim() !== '')
+  const additions = patterns.filter(pattern => pattern !== '' && !lines.includes(pattern))
+  if (additions.length === 0) return content
+  return `${lines.join('\n')}${lines.length > 0 ? '\n' : ''}${additions.join('\n')}\n`
+}

@@ -29,12 +29,13 @@ import { FileTree } from './FileTree.tsx'
 import { FileGrid } from './FileGrid.tsx'
 import { FileColumns } from './FileColumns.tsx'
 import { DEFAULT_FILE_TREE_SORT, type FileTreeSort } from './file-tree-sort.ts'
-import { IconColumnsOutline16, IconGridOutline16, IconListOutline16, IconUploadOutline16 } from './icons.tsx'
+import { IconColumnsOutline16, IconEyeOffOutline16, IconGridOutline16, IconListOutline16, IconUploadOutline16 } from './icons.tsx'
 import type { OpenInApp } from './open-in-app.ts'
 import type { OpenWithTarget } from './open-with.ts'
 import { t } from './locales.ts'
-import { isWithinWorkspace, resolveSidebarPath } from './paths.ts'
-import { IGNORE_FILE, parseIgnoreFile } from './ignore-file.ts'
+import { isWithinWorkspace, relativeTo, resolveSidebarPath } from './paths.ts'
+import { readCursorlikeDrag } from './cursorlike-interactions.ts'
+import { IGNORE_FILE, appendIgnorePatterns, parseIgnoreFile } from './ignore-file.ts'
 import { IconButton } from './ui/index.ts'
 import { UploadOverlay } from './UploadOverlay.tsx'
 import {
@@ -159,6 +160,8 @@ export function TreePanel(props: {
   const [view, setView] = useState<FilesView>(readFilesView)
   /** Grid icon size driven by Ctrl+wheel over the Files panel. */
   const [iconSize, setIconSize] = useState(readFilesIconSize)
+  /** The `.ignore` drop target's hover state. */
+  const [ignoreDropActive, setIgnoreDropActive] = useState(false)
 
   // The tree caches loaded directories per refresh tick, so content changed
   // outside DSH (another editor, a sync tool) stays stale until the manual
@@ -355,6 +358,41 @@ export function TreePanel(props: {
     }
   }
 
+  /** Append dragged workspace paths to the root `.ignore`, then refresh. */
+  const dropToIgnore = async (transfer: DataTransfer): Promise<void> => {
+    if (cwd === undefined) return
+    const value = readCursorlikeDrag(transfer)
+    if (value === undefined || value.sessionId !== sessionId) return
+    const ignorePath = resolveSidebarPath(cwd, IGNORE_FILE)
+    const patterns = value.paths.map((item) => {
+      const rel = relativeTo(cwd, item.path).replace(/\\/g, '/')
+      return item.directory ? `${rel.replace(/\/+$/, '')}/` : rel
+    }).filter(pattern => pattern !== '' && pattern !== '.' && !pattern.startsWith('..') && pattern !== IGNORE_FILE)
+    if (patterns.length === 0) return
+    let content = ''
+    let mtime: number | undefined
+    try {
+      if (typeof api.fsRead !== 'function') return
+      const current = await api.fsRead({ sessionId, cwd }, ignorePath)
+      if (current.kind === 'text') {
+        content = current.content
+        mtime = current.mtimeMs
+      }
+    } catch {
+      /* missing .ignore: create it below */
+    }
+    const lines = content.split(/\r?\n/).filter(line => line.trim() !== '')
+    const additions = patterns.filter(pattern => !lines.includes(pattern))
+    if (additions.length === 0) return
+    const next = appendIgnorePatterns(content, additions)
+    try {
+      await api.fsWrite({ sessionId, cwd }, ignorePath, next, mtime)
+      setRefreshTick(tick => tick + 1)
+    } catch (error) {
+      console.warn('[dsh-cursorlike-sidebar] .ignore write failed:', error)
+    }
+  }
+
   return (
     <div className={clsx(css.editorTreePanel, full === true && css.editorTreePanelFull)}>
       <div className={css.editorTreeSearch}>
@@ -381,6 +419,34 @@ export function TreePanel(props: {
             changeView(view === 'tree' ? 'grid' : view === 'grid' ? 'columns' : 'tree')
           }}
         />
+        <div
+          className={clsx(css.ignoreDrop, ignoreDropActive && css.ignoreDropActive)}
+          onDragEnter={(event) => {
+            if (event.dataTransfer?.types.includes('application/x-cursorlike-context') === true) {
+              event.preventDefault()
+              setIgnoreDropActive(true)
+            }
+          }}
+          onDragOver={(event) => {
+            if (event.dataTransfer?.types.includes('application/x-cursorlike-context') !== true) return
+            event.preventDefault()
+            event.dataTransfer.dropEffect = 'copy'
+            setIgnoreDropActive(true)
+          }}
+          onDragLeave={() => { setIgnoreDropActive(false) }}
+          onDrop={(event) => {
+            event.preventDefault()
+            setIgnoreDropActive(false)
+            void dropToIgnore(event.dataTransfer)
+          }}
+        >
+          <IconButton
+            label=".ignore"
+            title=".ignore"
+            icon={<IconEyeOffOutline16 size={14} />}
+            onClick={() => { if (cwd !== undefined) onOpenFile(resolveSidebarPath(cwd, IGNORE_FILE)) }}
+          />
+        </div>
         {/* Row order: the two keys are one choice (check mark), the
             folders-first switch is independent — the same two-group menu the
             host's own menus use. Picking a row closes the menu like every

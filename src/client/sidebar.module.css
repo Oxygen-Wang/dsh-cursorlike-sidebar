@@ -3105,3 +3105,17 @@ body[data-dsh-sidebar-dragging] .bottomPanel {
   width: var(--dsh-tree-icon-size, 14px);
   height: var(--dsh-tree-icon-size, 14px);
 }
+
+/* Drop target for "drag a row onto .ignore": the dashed outline appears only
+   while a compatible drag is hovering. */
+.ignoreDrop {
+  display: inline-flex;
+  align-items: center;
+  border: 1px dashed transparent;
+  border-radius: 6px;
+}
+
+.ignoreDropActive {
+  border-color: var(--dsw-alias-state-success-primary);
+  background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 14%, transparent);
+}

@@ -43,6 +43,7 @@ function click(element: HTMLElement): void {
 }
 
 beforeEach(() => {
+  localStorage.clear()
   fsWrite.mockReset()
   fsWrite.mockResolvedValue({ ok: true, mtimeMs: 456 })
   Object.defineProperty(window.navigator, 'language', { value: 'en-US', configurable: true })
@@ -92,5 +93,20 @@ describe('TextEditor review bar', () => {
     } finally {
       mounted.unmount()
     }
+  })
+
+  it('restores a pending review after the viewer is remounted', async () => {
+    const first = renderRoot(createElement(TextEditor, viewerProps()))
+    first.rerender(createElement(TextEditor, viewerProps({ content: 'const a = 2\n', mtimeMs: 124 })))
+    expect(button(first.container, 'Keep')).toBeDefined()
+    first.unmount()
+
+    const second = renderRoot(createElement(TextEditor, viewerProps({ content: 'const a = 2\n', mtimeMs: 124 })))
+    await act(async () => { await Promise.resolve() })
+    expect(second.container.querySelector('[data-cursorlike-review-actions]')).not.toBeNull()
+    expect(button(second.container, 'Keep')).toBeDefined()
+    click(button(second.container, 'Keep')!)
+    expect(button(second.container, 'Keep')).toBeUndefined()
+    second.unmount()
   })
 })

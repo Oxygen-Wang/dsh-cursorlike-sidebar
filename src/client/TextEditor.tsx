@@ -270,6 +270,79 @@ const inlineReviewField = StateField.define<DecorationSet>({
   provide: field => CodeMirrorView.decorations.from(field),
 })
 
+/** One pending review kept in localStorage, so a restart can restore it. */
+interface StoredEditorReview {
+  version: 1
+  path: string
+  oldText: string
+  newText: string
+  added: number
+  removed: number
+  lastLine: number
+  changedLines: readonly ReviewChangedLine[]
+}
+
+const REVIEW_STORE_PREFIX = 'dsh-cursorlike-sidebar:review:'
+/** Do not put whole multi-hundred-KB files into localStorage. */
+const REVIEW_STORE_MAX_TEXT = 400_000
+
+/** Stable per-session/per-file localStorage key. */
+function reviewStoreKey(sessionId: string, path: string): string {
+  return `${REVIEW_STORE_PREFIX}${encodeURIComponent(sessionId)}:${encodeURIComponent(path)}`
+}
+
+/** Persist one still-pending review. Storage/quota failures are non-fatal. */
+function saveStoredReview(sessionId: string, review: EditorReview): void {
+  if (review.oldText.length > REVIEW_STORE_MAX_TEXT || review.newText.length > REVIEW_STORE_MAX_TEXT) return
+  try {
+    const value: StoredEditorReview = {
+      version: 1,
+      path: review.path,
+      oldText: review.oldText,
+      newText: review.newText,
+      added: review.added,
+      removed: review.removed,
+      lastLine: review.lastLine,
+      changedLines: review.changedLines,
+    }
+    localStorage.setItem(reviewStoreKey(sessionId, review.path), JSON.stringify(value))
+  } catch {
+    /* storage unavailable: the review still works for this session */
+  }
+}
+
+/** Load one pending review if it still matches the file's current bytes. */
+function loadStoredReview(sessionId: string, path: string, content: string): EditorReview | null {
+  try {
+    const raw = localStorage.getItem(reviewStoreKey(sessionId, path))
+    if (raw === null) return null
+    const value = JSON.parse(raw) as Partial<StoredEditorReview> | null
+    if (value === null || value.version !== 1 || value.path !== path) return null
+    if (typeof value.oldText !== 'string' || typeof value.newText !== 'string') return null
+    if (!sameDocument(value.newText, content) || sameDocument(value.oldText, value.newText)) return null
+    return {
+      path,
+      oldText: value.oldText,
+      newText: value.newText,
+      added: typeof value.added === 'number' ? value.added : 0,
+      removed: typeof value.removed === 'number' ? value.removed : 0,
+      lastLine: typeof value.lastLine === 'number' ? value.lastLine : 1,
+      changedLines: Array.isArray(value.changedLines) ? value.changedLines : [],
+    }
+  } catch {
+    return null
+  }
+}
+
+/** Drop one persisted review (keep/reject means it is resolved). */
+function removeStoredReview(sessionId: string, path: string): void {
+  try {
+    localStorage.removeItem(reviewStoreKey(sessionId, path))
+  } catch {
+    /* storage unavailable */
+  }
+}
+
 export function TextEditor(props: FileViewerProps) {
   const { ctx, scope, path, viewerId, content, size, largeFile, line } = props
   const [mode, setMode] = useState<ViewMode>('preview')
@@ -567,9 +640,21 @@ export function TextEditor(props: FileViewerProps) {
     reviewRef.current = next
     if (active === null) setReviewDecision(null)
     setReview(next)
+    saveStoredReview(scope.sessionId, next)
     // The effect reads the host's current mtime alongside the new bytes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [content, path, readOnly])
+
+  // Restore a pending review after a restart when the file still holds the
+  // reviewed bytes. The keep/reject actions clear this storage entry.
+  useEffect(() => {
+    if (content === undefined || reviewRef.current !== null) return
+    const stored = loadStoredReview(scope.sessionId, path, content)
+    if (stored === null) return
+    reviewRef.current = stored
+    previousContentRef.current = { path, text: content }
+    setReview(stored)
+  }, [content, path, scope.sessionId])
 
   // External content -> live document, IN PLACE. The view (and its history,
   // scroll and — for a reader who is just looking — the caret) survives an
@@ -1170,6 +1255,7 @@ export function TextEditor(props: FileViewerProps) {
     reviewRef.current = null
     setReview(null)
     setReviewDecision({ review: current, kind: 'keep' })
+    removeStoredReview(scope.sessionId, path)
     // The kept bytes are the baseline the NEXT agent edit is compared against.
     previousContentRef.current = { path, text: current.newText }
     queueMicrotask(() => viewRef.current?.focus())
@@ -1186,6 +1272,7 @@ export function TextEditor(props: FileViewerProps) {
       reviewRef.current = null
       setReview(null)
       setReviewDecision({ review: current, kind: 'reject' })
+      removeStoredReview(scope.sessionId, path)
       replaceEditorText(current.oldText)
       // Disk and document now hold the OLD bytes: a later agent edit must be
       // diffed against those, not against the rejected revision.
@@ -1206,6 +1293,7 @@ export function TextEditor(props: FileViewerProps) {
       setReviewDecision(null)
       reviewRef.current = decision.review
       setReview(decision.review)
+      saveStoredReview(scope.sessionId, decision.review)
       previousContentRef.current = { path, text: decision.review.newText }
       queueMicrotask(() => viewRef.current?.focus())
       return
@@ -1217,6 +1305,7 @@ export function TextEditor(props: FileViewerProps) {
       setReviewDecision(null)
       reviewRef.current = decision.review
       setReview(decision.review)
+      saveStoredReview(scope.sessionId, decision.review)
       replaceEditorText(decision.review.newText)
       previousContentRef.current = { path, text: decision.review.newText }
       queueMicrotask(() => viewRef.current?.focus())
@@ -1565,7 +1654,8 @@ export function TextEditor(props: FileViewerProps) {
           ref={selectionPopup.buttonRef}
           draggable
           onDragStart={(event) => { selectionPopup.drag(event.dataTransfer) }}
-          title={`${t('addToConversation')} · Ctrl+L`}
+          title={t('addToConversation')}
+          aria-keyshortcuts="Control+L"
           className={css.selectionPopup}
           style={{ left: selectionPopup.popup.left, top: selectionPopup.popup.top }}
           // Keep the selection (and CodeMirror focus) alive until the click
