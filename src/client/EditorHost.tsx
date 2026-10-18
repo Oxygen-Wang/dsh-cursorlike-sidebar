@@ -485,16 +485,18 @@ export function EditorHost(props: {
   }, [scope.sessionId, scope.cwd, path, ctx, showEmpty, isDir, reloadSeq])
 
   // Save-then-refresh in preview mode (issue #167 part C): the edge into
-  // 'saved' (never a lingering 'saved' state) triggers exactly one reload, so
-  // a preview-mode Ctrl+S shows the fresh content immediately. Edit mode is
-  // left alone — reloading would remount the editor and drop the caret.
+  // 'saved' (never a lingering 'saved' state) refreshes once, so a
+  // preview-mode Ctrl+S shows the fresh content immediately. The quiet read
+  // keeps the viewer mounted (scroll, caret and a pending review survive);
+  // edit mode re-reads nothing because its document IS the saved bytes.
   const prevSaveState = useRef<EditorToolbarState['saveState'] | undefined>(undefined)
   useEffect(() => {
     const current = toolbar?.saveState
     if (prevSaveState.current !== 'saved' && current === 'saved' && toolbar?.mode === 'preview') {
-      setReloadSeq(sequence => sequence + 1)
+      refreshContentQuietly()
     }
     prevSaveState.current = current
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [toolbar?.saveState, toolbar?.mode])
 
   // Model-write auto-refresh (issue #855): a `write` / `edit` tool call of THIS
@@ -509,6 +511,41 @@ export function EditorHost(props: {
   const ops = useFileOpStream(scope, visible && !showEmpty && !isDir)
   /** The stream revision this tab's current path is known fresh at. */
   const opBaseline = useRef<{ key: string; revision: number } | null>(null)
+  /** Guards an in-flight quiet re-read against a path switch / newer read. */
+  const quietReadSeq = useRef(0)
+  /**
+   * Re-read the file WITHOUT the loading remount. The old flow published
+   * `{ status: 'loading' }`, which unmounted the viewer: the editor instance
+   * was rebuilt around the new bytes, so its pending review, undo history,
+   * caret and scroll were all lost — and the review's own "content changed
+   * without a remount" detector could never fire. An `fsRead` text viewer now
+   * receives the new bytes as a prop update instead; the editor applies them
+   * as a document transaction (see TextEditor's sync effect). Anything else
+   * keeps the full reload path, which is also the explicit escape hatch.
+   */
+  const refreshContentQuietly = (): void => {
+    if (load.status !== 'ready' || load.viewer.fetchStrategy !== 'fsRead') {
+      setReloadSeq(sequence => sequence + 1)
+      return
+    }
+    const sequence = quietReadSeq.current + 1
+    quietReadSeq.current = sequence
+    api.fsRead(scope, path).then((result) => {
+      if (quietReadSeq.current !== sequence) return
+      if (result.kind !== 'text') {
+        setReloadSeq(value => value + 1)
+        return
+      }
+      setLoad((previous) => previous.status === 'ready' && previous.viewer.fetchStrategy === 'fsRead'
+        ? { ...previous, content: result.content, size: result.size, mtimeMs: result.mtimeMs }
+        : previous)
+    }).catch(() => {
+      // Leave the current bytes on screen: the header's refresh button is the
+      // explicit retry, and a model write that cannot be re-read must not blank
+      // the editor.
+      if (quietReadSeq.current === sequence) setReloadSeq(value => value + 1)
+    })
+  }
   useEffect(() => {
     const key = `${scope.sessionId}\u0000${path}`
     const seen = opBaseline.current
@@ -525,16 +562,15 @@ export function EditorHost(props: {
     // tab, and neither branch may fire twice for the same revision.
     opBaseline.current = { key, revision: ops.revision }
     // Dirty priority (#228, #855): a draft lives only in the editor instance,
-    // and reloading remounts it — the user's unsaved input must never be
-    // overwritten by what the model wrote. An open edit session is skipped for
-    // the same reason (it would drop the caret); the pre-existing
-    // edit→preview edge reloads on the way back, and the header's refresh
-    // button stays the explicit escape hatch in both cases.
-    if (toolbar?.dirty === true || toolbar?.mode === 'edit') return
-    setReloadSeq(sequence => sequence + 1)
+    // and a reload would overwrite the user's unsaved input. An open edit
+    // session is refreshed too now: the in-place transaction keeps the caret,
+    // so the old "mode === 'edit'" carve-out is gone.
+    if (toolbar?.dirty === true) return
+    refreshContentQuietly()
     // Granular deps: the scope object's identity churns, so only its
     // sessionId / cwd fields gate this decision.
-  }, [ops, path, scope.sessionId, scope.cwd, toolbar?.dirty, toolbar?.mode])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ops, path, scope.sessionId, scope.cwd, toolbar?.dirty])
 
   const treeOpen = treeOpenOf(tab)
   /** Persist the panel flag on the tab (survives reloads with the layout). */

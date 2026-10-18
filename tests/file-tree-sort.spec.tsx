@@ -191,6 +191,8 @@ describe('FileTree sort prop', () => {
 
 describe('TreePanel sort control', () => {
   function mountPanel(): Harness {
+    localStorage.setItem('dsh-cursorlike-sidebar:files-view', 'tree')
+    localStorage.setItem('dsh-cursorlike-sidebar:files-view-v2', '1')
     const container = document.createElement('div')
     document.body.append(container)
     const root: Root = createRoot(container)

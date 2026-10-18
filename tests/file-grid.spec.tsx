@@ -21,10 +21,12 @@ beforeAll(() => {
 const { fsTree } = vi.hoisted(() => ({ fsTree: vi.fn() }))
 vi.mock('../src/client/api.ts', () => ({
   api: { fsTree: (...args: unknown[]) => fsTree(...args) },
+  mediaUrl: (_scope: unknown, path: string) => `/media?path=${encodeURIComponent(path)}`,
 }))
 
 const folder = { name: 'src', path: '/ws/src', isDir: true, hidden: false, isSymlink: false, broken: false }
 const file = { name: 'readme.md', path: '/ws/readme.md', isDir: false, hidden: false, isSymlink: false, broken: false }
+const image = { name: 'shot.png', path: '/ws/shot.png', isDir: false, hidden: false, isSymlink: false, broken: false }
 
 /** Resolve after the listing's promise/act queue has drained. */
 async function flush(): Promise<void> {
@@ -40,7 +42,7 @@ describe('FileGrid', () => {
     }))
     const opened: string[] = []
     const view = renderRoot(createElement(FileGrid, {
-      sessionId: 's1', cwd: '/ws',
+      sessionId: 's1', cwd: '/ws', iconSize: 48, onIconSizeChange: () => {},
       onOpenFile: (path: string) => { opened.push(path) },
       onReferenceFile: () => {},
     }))
@@ -77,7 +79,7 @@ describe('FileGrid', () => {
       folderIcon: vi.fn(() => createElement('span', { 'data-folder-icon': true })),
     } as unknown as BetterSidebarService
     const view = renderRoot(createElement(FileGrid, {
-      sessionId: 's1', cwd: '/ws', service,
+      sessionId: 's1', cwd: '/ws', service, iconSize: 48, onIconSizeChange: () => {},
       onOpenFile: () => {},
       onReferenceFile: () => {},
     }))
@@ -86,6 +88,20 @@ describe('FileGrid', () => {
     expect(service.fileIcon).toHaveBeenCalledWith('/ws/readme.md', 48)
     expect(view.container.querySelector('[data-folder-icon]')).not.toBeNull()
     expect(view.container.querySelector('[data-file-icon]')).not.toBeNull()
+    view.unmount()
+  })
+
+  it('shows an image thumbnail once the Ctrl+wheel size is large enough', async () => {
+    fsTree.mockResolvedValue({ path: '/ws', entries: [image], truncated: false })
+    const view = renderRoot(createElement(FileGrid, {
+      sessionId: 's1', cwd: '/ws', iconSize: 96, onIconSizeChange: () => {},
+      onOpenFile: () => {},
+      onReferenceFile: () => {},
+    }))
+    await flush()
+    const thumbnail = view.container.querySelector('img[class*="fileGridThumb"]')
+    expect(thumbnail).not.toBeNull()
+    expect(thumbnail?.getAttribute('src')).toContain('shot.png')
     view.unmount()
   })
 })

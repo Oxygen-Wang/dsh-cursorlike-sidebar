@@ -2903,6 +2903,19 @@ body[data-dsh-sidebar-dragging] .bottomPanel {
   align-items: center;
   justify-content: center;
   flex: none;
+  position: relative;
+  overflow: hidden;
+  border-radius: 6px;
+}
+
+.fileGridThumb {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 4px;
+  background: var(--dsw-alias-bg-layer-2);
 }
 
 .fileGridLabel {
@@ -2970,6 +2983,19 @@ body[data-dsh-sidebar-dragging] .bottomPanel {
   border-radius: 6px;
   background: color-mix(in srgb, var(--dsw-alias-bg-layer-1) 88%, transparent);
   font: var(--dsw-font-xxs-12);
+}
+
+/* The pending review's own diff tint: the changed new-file lines stay marked
+   while the Keep/Revert row is open, so the bar always has something to point
+   at instead of floating after an unmarked block. */
+.editorReviewLineAdd {
+  background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 11%, transparent);
+  box-shadow: inset 2px 0 0 var(--dsw-alias-state-success-primary);
+}
+
+.editorReviewLineMod {
+  background: color-mix(in srgb, var(--dsw-alias-brand-primary) 11%, transparent);
+  box-shadow: inset 2px 0 0 var(--dsw-alias-brand-primary);
 }
 
 .editorReviewInline .editorReviewText {

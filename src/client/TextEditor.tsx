@@ -16,7 +16,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 import clsx from 'clsx'
-import { EditorState, StateEffect, StateField } from '@codemirror/state'
+import { EditorState, StateEffect, StateField, Transaction, type Range } from '@codemirror/state'
 import { Decoration, EditorView as CodeMirrorView, keymap, lineNumbers, WidgetType, type DecorationSet } from '@codemirror/view'
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import { openSearchPanel } from '@codemirror/search'
@@ -109,6 +109,24 @@ function sameDocument(a: string, b: string): boolean {
 }
 
 /**
+ * Map a line/column in one spelling of a document onto its offset in another
+ * (the host's bytes may use CRLF while CodeMirror's normalized document does
+ * not). Clamped to the target line, so a shrunk file can never overflow.
+ */
+function offsetAt(text: string, line: number, column: number): number {
+  let start = 0
+  let current = 1
+  while (current < line) {
+    const next = text.indexOf('\n', start)
+    if (next < 0) return text.length
+    start = next + 1
+    current += 1
+  }
+  const end = text.indexOf('\n', start)
+  return Math.min(start + column, end < 0 ? text.length : end)
+}
+
+/**
  * One pending agent/external edit shown in the inline review bar. `oldText`
  * is the content the editor last displayed, `newText` the content the host
  * just loaded; accepting only drops the review, rejecting writes `oldText`
@@ -122,6 +140,15 @@ interface EditorReview {
   removed: number
   /** 1-based line after which the inline Keep/Revert bar sits. */
   lastLine: number
+  /** New-file lines touched by the change, tinted while the review is open
+   *  (`add` = inserted line, `mod` = line whose text changed). Deleted-only
+   *  lines have no new-file line to tint — the bar's counts still report them. */
+  changedLines: readonly ReviewChangedLine[]
+}
+
+interface ReviewChangedLine {
+  line: number
+  kind: 'add' | 'mod'
 }
 
 /** The most recent review decision, kept only for the undo window. */
@@ -159,6 +186,7 @@ class ReviewWidget extends WidgetType {
       && other.info.revertDisabled === this.info.revertDisabled
       && other.info.oldText.length === this.info.oldText.length
       && other.info.newText.length === this.info.newText.length
+      && other.info.changedLines.length === this.info.changedLines.length
   }
 
   override ignoreEvent(): boolean {
@@ -203,6 +231,27 @@ class ReviewWidget extends WidgetType {
   }
 }
 
+/**
+ * Build the review's document decorations: one tinted line per touched new-file
+ * line plus the action row after the last changed line. Ranges MUST be sorted —
+ * line starts are ascending by construction and the widget sits at the end of
+ * the last touched line, so appending it last keeps the set ordered.
+ */
+function inlineReviewDecorations(info: InlineReviewInfo, doc: { lines: number; line(n: number): { from: number } }): DecorationSet {
+  const ranges: Range<Decoration>[] = []
+  const seen = new Set<number>()
+  for (const change of info.changedLines) {
+    const lineNumber = Math.min(Math.max(1, change.line), doc.lines)
+    if (seen.has(lineNumber)) continue
+    seen.add(lineNumber)
+    ranges.push(Decoration.line({
+      class: change.kind === 'add' ? css.editorReviewLineAdd : css.editorReviewLineMod,
+    }).range(doc.line(lineNumber).from))
+  }
+  ranges.push(Decoration.widget({ widget: new ReviewWidget(info), side: 1 }).range(info.pos))
+  return Decoration.set(ranges)
+}
+
 /** Decorations holding at most one inline review action row. */
 const inlineReviewField = StateField.define<DecorationSet>({
   create: () => Decoration.none,
@@ -210,9 +259,11 @@ const inlineReviewField = StateField.define<DecorationSet>({
     let next = decorations.map(transaction.changes)
     for (const effect of transaction.effects) {
       if (!effect.is(setInlineReview)) continue
-      next = effect.value === null
-        ? Decoration.none
-        : Decoration.set([Decoration.widget({ widget: new ReviewWidget(effect.value), side: 1 }).range(effect.value.pos)])
+      if (effect.value === null) {
+        next = Decoration.none
+        continue
+      }
+      next = inlineReviewDecorations(effect.value, transaction.state.doc)
     }
     return next
   },
@@ -290,6 +341,9 @@ export function TextEditor(props: FileViewerProps) {
   /** The file is above the editable threshold: the viewer renders the
    *  read-only paged preview and no editor at all. */
   const readOnly = largeFile !== undefined
+  /** Whether the host has handed the document over. The view is built once per
+   *  path (not once per content value) so an agent write can update it in place. */
+  const hasContent = content !== undefined
   /** The uncommitted-change gutter (issue #212): the `code` viewer only,
    *  gated by ONE boolean setting (on by default). Nothing else — no
    *  end-of-line author widget, no badges, no animation. Read reactively
@@ -435,24 +489,31 @@ export function TextEditor(props: FileViewerProps) {
     }
   }, [ctx])
 
-  // A new file (tab switch) starts clean: fresh preview mode, no draft.
+  // A new file (path swap) starts clean: fresh preview mode, no draft, no
+  // pending review. Same-path content updates are NOT a new file any more —
+  // the host publishes an agent write as a new `content` value with the view
+  // still mounted (see the sync effect below), so resetting here on every
+  // change would drop the reader's mode and the review itself.
   useEffect(() => {
     setMode('preview')
     setDraft(null)
     setDirty(false)
     setSaveState('idle')
     setConflict(false)
+    reviewRef.current = null
+    setReview(null)
+    setReviewDecision(null)
     // The freshly loaded bytes are the new save baseline.
     mtimeRef.current = props.mtimeMs ?? null
     selectionPopup.hide()
-    // hide() reads a live ref; the reset must fire only on a content (file)
-    // swap, and the hook object's identity churns on every render.
+    // hide() reads a live ref; the reset must fire only on a path swap, and
+    // the hook object's identity churns on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [content])
+  }, [path])
 
-  // Detect an agent/external edit: the host reloads `content` without the
+  // Detect an agent/external edit: the host publishes new `content` without the
   // editor typing. The diff is shown in the review bar; accepting drops it,
-  // rejecting writes the previous bytes back (and both can be undone).
+  // rejecting writes the previous bytes back (and either can be undone).
   useEffect(() => {
     const previous = previousContentRef.current
     previousContentRef.current = { path, text: content }
@@ -469,6 +530,10 @@ export function TextEditor(props: FileViewerProps) {
       return
     }
     if (previous.text === undefined || sameDocument(previous.text, content)) return
+    // The host only republishes bytes it just read: adopt its mtime as the new
+    // save baseline even when the review itself is suppressed below (a dirty
+    // draft, an oversized file), or the next save would report fs-conflict.
+    mtimeRef.current = props.mtimeMs ?? mtimeRef.current
     if (readOnly || dirtyRef.current) return
     // Above this size the LCS table is not worth blocking the editor on;
     // the Changes tab remains the diff surface for huge files.
@@ -476,6 +541,7 @@ export function TextEditor(props: FileViewerProps) {
     let added = 0
     let removed = 0
     let lastLine = 1
+    const changedLines: ReviewChangedLine[] = []
     try {
       const rows = diffLines(previous.text, content)
       for (const row of rows) {
@@ -483,6 +549,9 @@ export function TextEditor(props: FileViewerProps) {
         else if (row.kind === 'del') removed += 1
         else if (row.kind === 'mod') { added += 1; removed += 1 }
         if (row.newLine !== undefined && row.kind !== 'context' && row.kind !== 'meta') lastLine = row.newLine
+        if (row.newLine !== undefined && (row.kind === 'add' || row.kind === 'mod')) {
+          changedLines.push({ line: row.newLine, kind: row.kind })
+        }
       }
     } catch {
       return
@@ -490,12 +559,51 @@ export function TextEditor(props: FileViewerProps) {
     if (added + removed === 0) return
     const active = reviewRef.current
     const next: EditorReview = active === null
-      ? { path, oldText: previous.text, newText: content, added, removed, lastLine }
-      : { ...active, newText: content, added, removed, lastLine }
+      ? { path, oldText: previous.text, newText: content, added, removed, lastLine, changedLines }
+      : { ...active, newText: content, added, removed, lastLine, changedLines }
     reviewRef.current = next
     if (active === null) setReviewDecision(null)
     setReview(next)
+    // The effect reads the host's current mtime alongside the new bytes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [content, path, readOnly])
+
+  // External content -> live document, IN PLACE. The view (and its history,
+  // scroll and — for a reader who is just looking — the caret) survives an
+  // agent write instead of being torn down and rebuilt. A dirty draft always
+  // wins: the host does not refresh a dirty tab, and if a caller does republish
+  // bytes anyway the user's unsaved input must not be overwritten. The
+  // transaction stays out of CodeMirror's undo history so Ctrl+Z keeps undoing
+  // the user's TYPING, not the model's edit.
+  useEffect(() => {
+    const view = viewRef.current
+    if (view === null || content === undefined || dirtyRef.current) return
+    const doc = view.state.doc
+    const live = doc.toString()
+    if (sameDocument(live, content)) {
+      mtimeRef.current = props.mtimeMs ?? mtimeRef.current
+      return
+    }
+    const selection = view.state.selection.main
+    const headLine = doc.lineAt(selection.head)
+    const anchorLine = doc.lineAt(selection.anchor)
+    const target = offsetAt(content, headLine.number, selection.head - headLine.from)
+    const anchor = offsetAt(content, anchorLine.number, selection.anchor - anchorLine.from)
+    suppressDirtyRef.current = true
+    try {
+      view.dispatch({
+        changes: { from: 0, to: doc.length, insert: content },
+        selection: { anchor, head: target },
+        annotations: Transaction.addToHistory.of(false),
+      })
+    } finally {
+      suppressDirtyRef.current = false
+    }
+    mtimeRef.current = props.mtimeMs ?? mtimeRef.current
+    setDraft(null)
+    // props.mtimeMs rides the same host update as `content`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [content, path])
 
   // A different file switches the remembered preview scroll position to that
   // file's own entry (first open: none, so the preview starts at the top).
@@ -504,13 +612,11 @@ export function TextEditor(props: FileViewerProps) {
   }, [scope, path])
 
   // Create the CodeMirror editor once the content is loaded. The view owns
-  // the document; React only tracks dirty state through the update listener
-  // (the draft — the preview's text — is snapshotted from the live view on
-  // entering preview, not re-stringified per keystroke). For markdown the
-  // view stays mounted while previewing (hidden), so unsaved edits survive
-  // the preview/edit toggle. The theme + syntax colors live in a compartment
-  // so a scheme flip reconfigures only that part — the document, undo
-  // history and scroll position survive.
+  // the document through its whole lifetime on a path: a later `content` value
+  // is applied as a transaction by the sync effect above instead of rebuilding
+  // the view (a rebuild would throw away the undo history, the scroll position
+  // and — critically — the pending review). The theme + syntax colors live in
+  // a compartment so a scheme flip reconfigures only that part.
   useEffect(() => {
     if (content === undefined) return
     const host = hostRef.current
@@ -640,8 +746,11 @@ export function TextEditor(props: FileViewerProps) {
     // The keymap's save() reads live refs; scope/path are stable for a
     // tab's lifetime, and the dark flip is handled by the reconfigure
     // effect below (recreating the view here would drop the draft).
+    // `hasContent` lets a viewer mounted before its read lands still build the
+    // view: a string->string content change must NOT recreate it (the sync
+    // effect above applies that transaction in place).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [content, path])
+  }, [path, hasContent])
 
   // Native sidebar tabs stay mounted while another tab is active. If a file
   // is opened while that host is hidden, CodeMirror can measure its viewport at
@@ -876,13 +985,14 @@ export function TextEditor(props: FileViewerProps) {
   const save = (): void => {
     const view = viewRef.current
     if (view === null || savingRef.current) return
+    const text = view.state.doc.toString()
     savingRef.current = true
     setSaveState('saving')
     // Optimistic concurrency: the draft was based on the bytes read at
     // `mtimeMs`; a file that changed on disk since is REFUSED (fs-conflict)
     // instead of clobbering whatever wrote it (the model, another tab, an
     // external editor). `null` = the file did not exist when loaded.
-    api.fsWrite(scope, path, view.state.doc.toString(), mtimeRef.current ?? null).then((result) => {
+    api.fsWrite(scope, path, text, mtimeRef.current ?? null).then((result) => {
       savingRef.current = false
       // Adopt the fresh baseline the host reports (absent on a stat failure —
       // keep the old one, the next save just re-checks).
@@ -891,6 +1001,15 @@ export function TextEditor(props: FileViewerProps) {
       setDirty(false)
       setConflict(false)
       setSaveState('saved')
+      // The saved bytes are the new revision every later comparison starts
+      // from: saving an agent edit IS accepting it, and it must not come back
+      // as "changed by the model" against the pre-edit bytes on the next write.
+      previousContentRef.current = { path, text }
+      if (reviewRef.current !== null && sameDocument(reviewRef.current.newText, text)) {
+        reviewRef.current = null
+        setReview(null)
+        setReviewDecision(null)
+      }
       // The saved bytes are a new revision of the uncommitted diff: re-read
       // the change set (the file's XY status code usually stays the same, so
       // the status store alone would never wake the gutter up again).
@@ -1033,7 +1152,10 @@ export function TextEditor(props: FileViewerProps) {
     setDirty(false)
     const view = viewRef.current
     if (view !== null) {
-      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } })
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: text },
+        annotations: Transaction.addToHistory.of(false),
+      })
     }
     queueMicrotask(() => { suppressDirtyRef.current = false })
   }
@@ -1045,6 +1167,8 @@ export function TextEditor(props: FileViewerProps) {
     reviewRef.current = null
     setReview(null)
     setReviewDecision({ review: current, kind: 'keep' })
+    // The kept bytes are the baseline the NEXT agent edit is compared against.
+    previousContentRef.current = { path, text: current.newText }
     queueMicrotask(() => viewRef.current?.focus())
   }
 
@@ -1053,12 +1177,15 @@ export function TextEditor(props: FileViewerProps) {
     const current = reviewRef.current
     if (current === null || dirtyRef.current) return
     try {
-      const result = await api.fsWrite(scope, path, current.oldText, props.mtimeMs ?? mtimeRef.current)
+      const result = await api.fsWrite(scope, path, current.oldText, mtimeRef.current)
       if (typeof result.mtimeMs === 'number') mtimeRef.current = result.mtimeMs
       reviewRef.current = null
       setReview(null)
       setReviewDecision({ review: current, kind: 'reject' })
       replaceEditorText(current.oldText)
+      // Disk and document now hold the OLD bytes: a later agent edit must be
+      // diffed against those, not against the rejected revision.
+      previousContentRef.current = { path, text: current.oldText }
       queueMicrotask(() => viewRef.current?.focus())
     } catch {
       setSaveState('failed')
@@ -1068,19 +1195,24 @@ export function TextEditor(props: FileViewerProps) {
   /** Undo the last keep/reject: restore the review bar and (for reject) bytes. */
   const undoReview = async (): Promise<void> => {
     const decision = reviewDecision
-    if (decision === null) return
-    setReviewDecision(null)
+    if (decision === null || dirtyRef.current) return
     if (decision.kind === 'keep') {
+      setReviewDecision(null)
       reviewRef.current = decision.review
       setReview(decision.review)
+      previousContentRef.current = { path, text: decision.review.newText }
+      queueMicrotask(() => viewRef.current?.focus())
       return
     }
     try {
-      const result = await api.fsWrite(scope, path, decision.review.newText, props.mtimeMs ?? mtimeRef.current)
+      const result = await api.fsWrite(scope, path, decision.review.newText, mtimeRef.current)
       if (typeof result.mtimeMs === 'number') mtimeRef.current = result.mtimeMs
+      setReviewDecision(null)
       reviewRef.current = decision.review
       setReview(decision.review)
       replaceEditorText(decision.review.newText)
+      previousContentRef.current = { path, text: decision.review.newText }
+      queueMicrotask(() => viewRef.current?.focus())
     } catch {
       setSaveState('failed')
     }
@@ -1108,16 +1240,12 @@ export function TextEditor(props: FileViewerProps) {
     })
   }, [review, content, dirty])
 
-  // The undo window closes itself; a new review also replaces the old one.
-  useEffect(() => {
-    if (reviewDecision === null) return
-    const timer = window.setTimeout(() => { setReviewDecision(null) }, 8000)
-    return () => { window.clearTimeout(timer) }
-  }, [reviewDecision])
-
   // Ctrl/Cmd+K keeps, Ctrl/Cmd+J rejects, Ctrl/Cmd+Z undoes the last decision.
   // Only while the editor (or the review bar) owns focus; the composer and
-  // terminal keep their own keys.
+  // terminal keep their own keys. Ctrl+Z is NOT stolen from CodeMirror's own
+  // text undo once the user has typed since the decision: the shortcut undoes
+  // the decision only while the document still holds the exact bytes that
+  // decision produced.
   useEffect(() => {
     if (review === null && reviewDecision === null) return
     const onKey = (event: KeyboardEvent): void => {
@@ -1126,8 +1254,9 @@ export function TextEditor(props: FileViewerProps) {
       const key = event.key.toLowerCase()
       const active = document.activeElement
       const inlineActions = active instanceof Element && active.closest('[data-cursorlike-review-actions]') !== null
-      const inside = viewRef.current?.hasFocus === true || (reviewBarRef.current?.contains(active) === true) || inlineActions
-      if (!inside) return
+      const inEditor = viewRef.current?.hasFocus === true
+      const inBar = reviewBarRef.current?.contains(active) === true
+      if (!(inEditor || inBar || inlineActions)) return
       if (review !== null && (key === 'k' || key === 'j')) {
         event.preventDefault()
         event.stopPropagation()
@@ -1136,6 +1265,11 @@ export function TextEditor(props: FileViewerProps) {
         return
       }
       if (reviewDecision !== null && key === 'z' && !event.shiftKey) {
+        const live = viewRef.current?.state.doc.toString()
+        const expected = reviewDecision.kind === 'keep' ? reviewDecision.review.newText : reviewDecision.review.oldText
+        // Focus on the undo bar always means the review decision; focus in the
+        // editor only while its text is still the post-decision document.
+        if (!inBar && (live === undefined || !sameDocument(live, expected))) return
         event.preventDefault()
         event.stopPropagation()
         void undoReview()
@@ -1269,11 +1403,38 @@ export function TextEditor(props: FileViewerProps) {
           />
         </>
       )}
+      {review !== null && showingPreview && (
+        <div className={css.editorReviewDock} role="status" aria-live="polite">
+          <div className={css.editorReviewBar} data-cursorlike-review-actions="">
+            <span className={css.editorReviewText}>
+              {t('reviewChanged')} <span className={css.editorReviewCounts}>+{review.added} / −{review.removed}</span>
+            </span>
+            <button type="button" className={css.editorReviewKeep} onClick={keepReview}>
+              {t('reviewKeep')} <kbd className={css.editorReviewKbd}>Ctrl+K</kbd>
+            </button>
+            <button
+              type="button"
+              className={css.editorReviewReject}
+              onClick={() => { void rejectReview() }}
+              disabled={dirty}
+              title={dirty ? t('unsaved') : undefined}
+            >
+              {t('reviewReject')} <kbd className={css.editorReviewKbd}>Ctrl+J</kbd>
+            </button>
+          </div>
+        </div>
+      )}
       {reviewDecision !== null && (
         <div className={css.editorReviewDock} ref={reviewBarRef} role="status" aria-live="polite">
           <div className={css.editorReviewUndo}>
             <span>{reviewDecision.kind === 'keep' ? t('reviewKept') : t('reviewRejected')}</span>
-            <button type="button" className={css.editorReviewUndoButton} onClick={() => { void undoReview() }}>
+            <button
+              type="button"
+              className={css.editorReviewUndoButton}
+              onClick={() => { void undoReview() }}
+              disabled={dirty}
+              title={dirty ? t('unsaved') : undefined}
+            >
               {t('reviewUndo')} <kbd className={css.editorReviewKbd}>Ctrl+Z</kbd>
             </button>
           </div>

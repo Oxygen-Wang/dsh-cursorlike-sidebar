@@ -46,17 +46,40 @@ import css from './sidebar.module.css'
 /** Files view preference (tree, desktop icon grid, or Miller columns). */
 type FilesView = 'tree' | 'grid' | 'columns'
 const FILES_VIEW_KEY = 'dsh-cursorlike-sidebar:files-view'
+const FILES_VIEW_MIGRATION_KEY = 'dsh-cursorlike-sidebar:files-view-v2'
+const FILES_ICON_KEY = 'dsh-cursorlike-sidebar:files-icon-size'
+const FILES_ICON_DEFAULT = 48
+const FILES_ICON_MIN = 24
+const FILES_ICON_MAX = 160
 
 /**
- * Read the persisted Files view. Storage failures fall back to the tree.
+ * Read the persisted Files view. The desktop grid is the default; a stored
+ * choice (tree or columns) still wins.
  * @returns the view to mount.
  */
 function readFilesView(): FilesView {
   try {
     const value = localStorage.getItem(FILES_VIEW_KEY)
-    return value === 'grid' || value === 'columns' ? value : 'tree'
+    // One-time migration to the new desktop-grid default. Columns remains a
+    // deliberate choice; a tree chosen later (after the marker exists) is kept.
+    if (localStorage.getItem(FILES_VIEW_MIGRATION_KEY) === null) {
+      localStorage.setItem(FILES_VIEW_MIGRATION_KEY, '1')
+      return value === 'columns' ? 'columns' : 'grid'
+    }
+    return value === 'tree' || value === 'columns' ? value : 'grid'
   } catch {
-    return 'tree'
+    return 'grid'
+  }
+}
+
+/** Read the persisted grid icon size, clamped for the wheel zoom range. */
+function readFilesIconSize(): number {
+  try {
+    const raw = localStorage.getItem(FILES_ICON_KEY)
+    const value = raw === null ? FILES_ICON_DEFAULT : Number(raw)
+    return Number.isFinite(value) ? Math.min(FILES_ICON_MAX, Math.max(FILES_ICON_MIN, value)) : FILES_ICON_DEFAULT
+  } catch {
+    return FILES_ICON_DEFAULT
   }
 }
 
@@ -134,6 +157,8 @@ export function TreePanel(props: {
   const [sortOpen, setSortOpen] = useState(false)
   /** Desktop-icon grid vs the original tree; persisted for the next open. */
   const [view, setView] = useState<FilesView>(readFilesView)
+  /** Grid icon size driven by Ctrl+wheel over the Files panel. */
+  const [iconSize, setIconSize] = useState(readFilesIconSize)
 
   // The tree caches loaded directories per refresh tick, so content changed
   // outside DSH (another editor, a sync tool) stays stale until the manual
@@ -319,6 +344,17 @@ export function TreePanel(props: {
     }
   }
 
+  /** Clamp, persist and apply one Ctrl+wheel grid size. */
+  const changeIconSize = (next: number): void => {
+    const clamped = Math.min(FILES_ICON_MAX, Math.max(FILES_ICON_MIN, Math.round(next)))
+    setIconSize(clamped)
+    try {
+      localStorage.setItem(FILES_ICON_KEY, String(clamped))
+    } catch {
+      /* storage unavailable: keep the in-memory size */
+    }
+  }
+
   return (
     <div className={clsx(css.editorTreePanel, full === true && css.editorTreePanelFull)}>
       <div className={css.editorTreeSearch}>
@@ -466,6 +502,8 @@ export function TreePanel(props: {
             exclude={effectiveExclude}
             visible={visible !== false}
             service={service}
+            iconSize={iconSize}
+            onIconSizeChange={changeIconSize}
             onOpenFile={onOpenFile}
             onOpenFileNewTab={onOpenFileNewTab}
             onOpenFileSide={onOpenFileSide}

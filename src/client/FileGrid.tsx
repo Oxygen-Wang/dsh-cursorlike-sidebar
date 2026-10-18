@@ -12,7 +12,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type
 import { createPortal } from 'react-dom'
 import clsx from 'clsx'
 import { IconRefreshOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
-import { api, type FsEntry, type SessionScope } from './api.ts'
+import { api, mediaUrl, type FsEntry, type SessionScope } from './api.ts'
 import type { BetterSidebarService } from './service.ts'
 import { builtinFileIcon, builtinFolderIcon } from './file-icons.tsx'
 import { writeReferenceDrag } from './cursorlike-interactions.ts'
@@ -30,6 +30,9 @@ function parentOf(path: string): string {
   return /^[A-Za-z]:$/.test(parent) ? `${parent}\\` : parent
 }
 
+/** Image extensions the large grid renders as real thumbnails. */
+const IMAGE_PATH = /\.(?:avif|bmp|gif|ico|jpe?g|png|svg|webp)$/i
+
 interface GridMenuState {
   entry: FsEntry
   x: number
@@ -42,6 +45,9 @@ export function FileGrid(props: {
   exclude?: readonly string[]
   visible?: boolean
   service?: BetterSidebarService
+  /** Icon/thumbnail size; Ctrl+wheel drives it. */
+  iconSize: number
+  onIconSizeChange: (next: number) => void
   onOpenFile: (path: string) => void
   onOpenFileNewTab?: (path: string) => void
   onOpenFileSide?: (path: string) => void
@@ -49,6 +55,7 @@ export function FileGrid(props: {
 }) {
   const {
     sessionId, cwd, exclude, visible, service,
+    iconSize, onIconSizeChange,
     onOpenFile, onOpenFileNewTab, onOpenFileSide, onReferenceFile,
   } = props
   const [currentDir, setCurrentDir] = useState<string | undefined>(cwd)
@@ -109,6 +116,22 @@ export function FileGrid(props: {
     }
   }, [menu])
 
+  // Ctrl/Cmd+wheel over the grid changes the icon/thumbnail size. The native
+  // listener (not React's passive wheel) can preventDefault so the browser
+  // does not zoom the whole GUI.
+  useEffect(() => {
+    const element = rootRef.current
+    if (element === null) return
+    const onWheel = (event: WheelEvent): void => {
+      if (!event.ctrlKey || event.deltaY === 0) return
+      event.preventDefault()
+      event.stopPropagation()
+      onIconSizeChange(iconSize - Math.sign(event.deltaY) * 8)
+    }
+    element.addEventListener('wheel', onWheel, { passive: false })
+    return () => { element.removeEventListener('wheel', onWheel) }
+  }, [iconSize, onIconSizeChange])
+
   const scope = useMemo<SessionScope>(() => ({ sessionId, cwd }), [sessionId, cwd])
   const atRoot = cwd === undefined || currentDir === undefined || currentDir === cwd
   const relative = cwd !== undefined && currentDir !== undefined ? relativeTo(cwd, currentDir) : '.'
@@ -146,9 +169,14 @@ export function FileGrid(props: {
 
   const iconFor = (entry: FsEntry): ReactNode => {
     if (entry.isDir) {
-      return service !== undefined ? service.folderIcon(entry.path, true, 48) : builtinFolderIcon(true, 48)
+      return service !== undefined ? service.folderIcon(entry.path, true, iconSize) : builtinFolderIcon(true, iconSize)
     }
-    return service !== undefined ? service.fileIcon(entry.path, 48) : builtinFileIcon(entry.path, 48)
+    return service !== undefined ? service.fileIcon(entry.path, iconSize) : builtinFileIcon(entry.path, iconSize)
+  }
+
+  const thumbFor = (entry: FsEntry): string | null => {
+    if (entry.isDir || iconSize < 64 || !IMAGE_PATH.test(entry.path)) return null
+    return mediaUrl(scope, entry.path)
   }
 
   const copyPath = (path: string): void => {
@@ -190,7 +218,12 @@ export function FileGrid(props: {
       {!loading && error !== null && <div className={css.gitError}>{error}</div>}
       {!loading && error === null && (
         <div className={css.fileGridScroll}>
-          <div className={css.fileGrid} role="list" aria-label={relative}>
+          <div
+            className={css.fileGrid}
+            role="list"
+            aria-label={relative}
+            style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${Math.max(88, iconSize + 44)}px, 1fr))` }}
+          >
             <button
               type="button"
               className={clsx(css.fileGridItem, css.fileGridBack, atRoot && css.fileGridBackDisabled)}
@@ -198,10 +231,14 @@ export function FileGrid(props: {
               title={t('parent')}
               onClick={goBack}
             >
-              <span className={css.fileGridIcon}><IconArrowLeftOutline16 size={40} /></span>
+              <span className={css.fileGridIcon} style={{ width: iconSize + 4, height: iconSize + 4 }}>
+                <IconArrowLeftOutline16 size={Math.min(64, Math.max(24, iconSize))} />
+              </span>
               <span className={css.fileGridLabel}>{t('parent')}</span>
             </button>
-            {entries.map((entry) => (
+            {entries.map((entry) => {
+              const thumb = thumbFor(entry)
+              return (
               <button
                 key={entry.path}
                 type="button"
@@ -222,10 +259,23 @@ export function FileGrid(props: {
                   writeReferenceDrag(event.dataTransfer, scope, [{ path: entry.path, directory: entry.isDir }])
                 }}
               >
-                <span className={css.fileGridIcon}>{iconFor(entry)}</span>
+                <span className={css.fileGridIcon} style={{ width: iconSize + 4, height: iconSize + 4 }}>
+                  {iconFor(entry)}
+                  {thumb !== null && (
+                    <img
+                      className={css.fileGridThumb}
+                      src={thumb}
+                      alt=""
+                      loading="lazy"
+                      draggable={false}
+                      onError={(event) => { event.currentTarget.style.display = 'none' }}
+                    />
+                  )}
+                </span>
                 <span className={css.fileGridLabel}>{entry.name}</span>
               </button>
-            ))}
+              )
+            })}
           </div>
           {truncated && <div className={css.fileGridTruncated}>{t('filesTruncated')}</div>}
         </div>
