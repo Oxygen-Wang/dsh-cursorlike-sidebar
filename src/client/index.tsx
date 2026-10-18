@@ -29,8 +29,10 @@ import { loadBootDecision } from './prefs.ts'
 import { SideCardSection } from './SideCardSection.tsx'
 import { api } from './api.ts'
 import { installDiffApprovalPolish } from './diff-approval-polish.ts'
+import { installDiffActionsBridge } from './diff-actions-bridge.ts'
 
 installDiffApprovalPolish()
+installDiffActionsBridge()
 import { LOCALE_NS, attachLocale, attachBetterLocale, t, zh, en } from './locales.ts'
 import { loadChunk } from './chunk-loader.ts'
 import css from './sidebar.module.css'
