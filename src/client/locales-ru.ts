@@ -641,4 +641,10 @@ export const ru: Record<string, string> = {
   pluginTurnOutlineDesc: "Сворачивает сессию в раунды пользователя (ввод + шаги инструментов + вывод); клик по любому шагу возвращает к точному месту в диалоге — без вызовов LLM, только чтение",
   pluginDshMemoryDeltaName: 'dsh-memory-delta Память',
   pluginDshMemoryDeltaDesc: 'Память между сессиями: внедряется только то, что изменилось (ничего, если ничего не менялось), с напоминанием о дате проверки, поиском по релевантности и вкладкой в боковой панели.',
+  reviewChanged: 'File changed',
+  reviewKeep: 'Keep',
+  reviewReject: 'Revert',
+  reviewUndo: 'Undo',
+  reviewKept: 'Kept',
+  reviewRejected: 'Reverted',
 }

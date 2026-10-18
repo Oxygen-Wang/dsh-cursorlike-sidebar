@@ -34,6 +34,7 @@
  */
 import type { Context, SidebarConversation } from '../context-types.ts'
 import { baseName, workspaceRelativePath } from './paths.ts'
+import { lineSuffix, referenceText, type SelectionReference } from './selection-reference.ts'
 
 /** A resolved composer caret/selection in draft coordinates. */
 export interface DraftCaret {
@@ -267,6 +268,29 @@ export function insertWorkspaceReference(ctx: Context, sessionId: string, path: 
     console.warn('[dsh-cursorlike-sidebar] workspace-reference insert failed:', error)
     return false
   }
+}
+
+/**
+ * Insert one selected-text reference: the file's native `@` chip followed by
+ * the ` line 12-18` suffix. The chip is inserted first so the reference stays
+ * a real DSH file link; the suffix is plain text (the host's `@` grammar has no
+ * line-range token of its own). When the workspace root cannot resolve the
+ * path, fall back to the absolute-path text form rather than dropping the
+ * gesture.
+ * @param ctx - the client context.
+ * @param sessionId - the session whose draft receives the reference.
+ * @param reference - the selected file and line span.
+ * @returns whether the draft was changed.
+ */
+export function insertSelectionReference(
+  ctx: Context,
+  sessionId: string,
+  reference: SelectionReference,
+): boolean {
+  const suffix = lineSuffix(reference.lines)
+  const inserted = insertWorkspaceReference(ctx, sessionId, reference.path, false)
+  if (inserted) return suffix === '' ? true : appendToDraft(ctx, sessionId, suffix)
+  return appendToDraft(ctx, sessionId, referenceText(reference))
 }
 
 /**

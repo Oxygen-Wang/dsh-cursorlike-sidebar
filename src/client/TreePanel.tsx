@@ -26,8 +26,9 @@ import { api } from './api.ts'
 import type { BetterSidebarService } from './service.ts'
 import { ancestorDirs } from './state.ts'
 import { FileTree } from './FileTree.tsx'
+import { FileGrid } from './FileGrid.tsx'
 import { DEFAULT_FILE_TREE_SORT, type FileTreeSort } from './file-tree-sort.ts'
-import { IconUploadOutline16 } from './icons.tsx'
+import { IconGridOutline16, IconListOutline16, IconUploadOutline16 } from './icons.tsx'
 import type { OpenInApp } from './open-in-app.ts'
 import type { OpenWithTarget } from './open-with.ts'
 import { t } from './locales.ts'
@@ -40,6 +41,22 @@ import {
   UPLOAD_HINT_MS, type UploadItem,
 } from './upload.ts'
 import css from './sidebar.module.css'
+
+/** Files view preference (tree vs desktop-style icon grid). */
+type FilesView = 'tree' | 'grid'
+const FILES_VIEW_KEY = 'dsh-cursorlike-sidebar:files-view'
+
+/**
+ * Read the persisted Files view. Storage failures fall back to the tree.
+ * @returns the view to mount.
+ */
+function readFilesView(): FilesView {
+  try {
+    return localStorage.getItem(FILES_VIEW_KEY) === 'grid' ? 'grid' : 'tree'
+  } catch {
+    return 'tree'
+  }
+}
 
 /** One in-flight upload session (the overlay's progress source). */
 interface UploadSession {
@@ -113,6 +130,8 @@ export function TreePanel(props: {
    */
   const [sort, setSort] = useState<FileTreeSort>(DEFAULT_FILE_TREE_SORT)
   const [sortOpen, setSortOpen] = useState(false)
+  /** Desktop-icon grid vs the original tree; persisted for the next open. */
+  const [view, setView] = useState<FilesView>(readFilesView)
 
   // The tree caches loaded directories per refresh tick, so content changed
   // outside DSH (another editor, a sync tool) stays stale until the manual
@@ -288,6 +307,16 @@ export function TreePanel(props: {
     setQuery('')
   }
 
+  /** Persist and apply one Files view change. */
+  const changeView = (next: FilesView): void => {
+    setView(next)
+    try {
+      localStorage.setItem(FILES_VIEW_KEY, next)
+    } catch {
+      /* storage unavailable: keep the in-memory view */
+    }
+  }
+
   return (
     <div className={clsx(css.editorTreePanel, full === true && css.editorTreePanelFull)}>
       <div className={css.editorTreeSearch}>
@@ -302,6 +331,11 @@ export function TreePanel(props: {
           label={t('refresh')}
           icon={<IconRefreshOutlineRegular size={14} />}
           onClick={() => { setRefreshTick(tick => tick + 1) }}
+        />
+        <IconButton
+          label={t('files')}
+          icon={view === 'tree' ? <IconGridOutline16 size={14} /> : <IconListOutline16 size={14} />}
+          onClick={() => { changeView(view === 'tree' ? 'grid' : 'tree') }}
         />
         {/* Row order: the two keys are one choice (check mark), the
             folders-first switch is independent — the same two-group menu the
@@ -416,6 +450,19 @@ export function TreePanel(props: {
       </div>
       {/* The tree stays MOUNTED while searching: its level cache and the
           directory watcher survive a query, so clearing the box is free. */}
+      {view === 'grid' && !searching ? (
+        <FileGrid
+          sessionId={sessionId}
+          cwd={cwd}
+          exclude={effectiveExclude}
+          visible={visible !== false}
+          service={service}
+          onOpenFile={onOpenFile}
+          onOpenFileNewTab={onOpenFileNewTab}
+          onOpenFileSide={onOpenFileSide}
+          onReferenceFile={onReferenceFile}
+        />
+      ) : (
       <FileTree
         sessionId={sessionId}
         cwd={cwd}
@@ -444,6 +491,7 @@ export function TreePanel(props: {
         sort={sort}
         service={service}
       />
+      )}
       {upload !== null && (
         <UploadOverlay
           dir={upload.dir}

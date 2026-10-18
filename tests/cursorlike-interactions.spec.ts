@@ -10,12 +10,17 @@ function transfer(): DataTransfer {
 }
 
 describe('CursorLike context drag', () => {
-  it('preserves plain editor selection while attaching the session payload', () => {
+  it('carries the file and line span while preserving a plain-text fallback', () => {
     const data = transfer()
-    data.setData('text/plain', 'original')
-    writeSelectionDrag(data, 'session-1', 'formatted code')
-    expect(data.getData('text/plain')).toBe('original')
-    expect(readCursorlikeDrag(data)).toEqual({ version: 1, sessionId: 'session-1', paths: [], text: 'formatted code' })
+    writeSelectionDrag(data, 'session-1', { path: 'C:/w/a.ts', lines: { start: 12, end: 18 } })
+    expect(data.getData('text/plain')).toBe('@C:/w/a.ts line 12-18')
+    expect(readCursorlikeDrag(data)).toEqual({
+      version: 1,
+      sessionId: 'session-1',
+      paths: [{ path: 'C:/w/a.ts', directory: false }],
+      lineStart: 12,
+      lineEnd: 18,
+    })
   })
   it.each(['null', '{}', '{bad', '{"version":1,"sessionId":"s","paths":[null]}'])('rejects malformed payload %s', raw => {
     const data = transfer()

@@ -634,4 +634,10 @@ export const it: Record<string, string> = {
   pluginTurnOutlineDesc: "Ripiega la sessione in turni utente (input + passaggi strumento + output); clic su un passaggio per tornare al punto esatto della conversazione — nessuna chiamata LLM, sola lettura",
   pluginDshMemoryDeltaName: 'dsh-memory-delta Memoria',
   pluginDshMemoryDeltaDesc: 'Memoria tra sessioni: inietta solo ciò che è cambiato (nulla se nulla è cambiato), con promemoria di revisione, ricerca per rilevanza e scheda laterale.',
+  reviewChanged: 'File changed',
+  reviewKeep: 'Keep',
+  reviewReject: 'Revert',
+  reviewUndo: 'Undo',
+  reviewKept: 'Kept',
+  reviewRejected: 'Reverted',
 }

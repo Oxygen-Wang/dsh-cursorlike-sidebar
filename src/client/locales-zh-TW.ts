@@ -658,4 +658,10 @@ export const zhTW: Record<string, string> = {
   pluginTurnOutlineDesc: "把會話按用戶輪次摺疊成「輸入 + 工具步驟 + 輸出」摘要，點擊任意步驟一鍵跳回對話原位；零 LLM 調用、唯讀",
   pluginDshMemoryDeltaName: 'dsh-memory-delta 記憶',
   pluginDshMemoryDeltaDesc: '跨工作階段記憶：只注入有變動的部分（沒有變動則完全不注入），附到期覆核提醒、相關度排序檢索與側邊欄分頁。',
+  reviewChanged: '檔案已修改',
+  reviewKeep: '保留',
+  reviewReject: '撤銷',
+  reviewUndo: '復原',
+  reviewKept: '已保留',
+  reviewRejected: '已撤銷',
 }

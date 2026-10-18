@@ -26,21 +26,27 @@
  * caller preventDefaults it to keep the selection/caret alive until the
  * click commits (the hook's capture-phase listener runs first and must not
  * hide for it).
+ *
+ * The payload is generic: the code editor commits a `SelectionReference`
+ * (file + line span), while the popup tests use plain strings. The hook only
+ * renders a `label` and hands the payload to the caller's commit/drag
+ * callbacks.
  */
 import { useEffect, useRef, useState, type RefObject } from 'react'
-import { writeSelectionDrag } from './cursorlike-interactions.ts'
 
 /** The floating "add to conversation" action: payload + viewport anchor. */
-export interface SelectionPopup {
-  insert: string
+export interface SelectionPopup<T> {
+  payload: T
+  /** Button text shown to the user. */
+  label: string
   left: number
   top: number
 }
 
-export interface SelectionPopupOptions {
+export interface SelectionPopupOptions<T> {
   sessionId?: string
-  /** Commit the payload into the composer draft (button click). */
-  onCommit(insert: string): void
+  /** Commit the payload into the composer draft (button click / Ctrl+L). */
+  onCommit(payload: T): void
   /**
    * The DOM surface that must stay on screen for the popup to live: the
    * markdown preview container in preview mode, the CodeMirror host
@@ -55,46 +61,55 @@ export interface SelectionPopupOptions {
    * selection, a whitespace-only one, or an unavailable surface) leaves the
    * key unhandled.
    */
-  resolve?(): string | null
+  resolve?(): T | null
+  /** Button text for one payload (defaults to `String(payload)`). */
+  label?(payload: T): string
+  /** Serialize the payload when the user drags the floating button. */
+  onDrag?(transfer: DataTransfer, payload: T): void
 }
 
-export interface SelectionPopupControls {
+export interface SelectionPopupControls<T> {
   drag(transfer: DataTransfer): void
   /** The current popup (null = hidden). */
-  popup: SelectionPopup | null
+  popup: SelectionPopup<T> | null
   /** Attach to the portaled button element. */
   buttonRef: RefObject<HTMLButtonElement>
   /** Anchor the popup above a selection (viewport-clamped). */
-  show(insert: string, left: number, top: number): void
+  show(payload: T, left: number, top: number): void
   /** Hide the popup (idempotent). */
   hide(): void
   /** The button's click: commit the stored payload, then hide. */
   commit(): void
 }
 
-export function useSelectionPopup(options: SelectionPopupOptions): SelectionPopupControls {
+export function useSelectionPopup<T>(options: SelectionPopupOptions<T>): SelectionPopupControls<T> {
   // Latest-callback refs: the dismissal listeners live for the mount's
   // lifetime, so they must not capture stale closures across renders.
   const onCommitRef = useRef(options.onCommit)
   const getSurfaceRef = useRef(options.getSurface)
   const resolveRef = useRef(options.resolve)
+  const labelRef = useRef(options.label)
+  const onDragRef = useRef(options.onDrag)
   const sessionRef = useRef(options.sessionId)
   sessionRef.current = options.sessionId
   onCommitRef.current = options.onCommit
   getSurfaceRef.current = options.getSurface
   resolveRef.current = options.resolve
+  labelRef.current = options.label
+  onDragRef.current = options.onDrag
 
-  const [popup, setPopup] = useState<SelectionPopup | null>(null)
+  const [popup, setPopup] = useState<SelectionPopup<T> | null>(null)
   /** Live mirror for click/event-time reads (no re-render race). */
-  const popupRef = useRef<SelectionPopup | null>(null)
+  const popupRef = useRef<SelectionPopup<T> | null>(null)
   /** The portaled button itself (for the outside-click guard). */
   const buttonRef = useRef<HTMLButtonElement>(null)
   /** The surface visibility observer (created lazily on open). */
   const observerRef = useRef<IntersectionObserver | null>(null)
 
-  const show = (insert: string, left: number, top: number): void => {
-    const next: SelectionPopup = {
-      insert,
+  const show = (payload: T, left: number, top: number): void => {
+    const next: SelectionPopup<T> = {
+      payload,
+      label: labelRef.current?.(payload) ?? String(payload),
       left: Math.min(Math.max(left, 80), window.innerWidth - 80),
       top,
     }
@@ -110,13 +125,14 @@ export function useSelectionPopup(options: SelectionPopupOptions): SelectionPopu
   const commit = (): void => {
     const current = popupRef.current
     if (current === null) return
-    onCommitRef.current(current.insert)
+    onCommitRef.current(current.payload)
     hide()
   }
 
   const drag = (transfer: DataTransfer): void => {
     const current = popupRef.current
-    if (current && sessionRef.current) writeSelectionDrag(transfer, sessionRef.current, current.insert)
+    if (current === null) return
+    onDragRef.current?.(transfer, current.payload)
   }
 
   // Global dismissal listeners, registered once; every handler reads the
@@ -151,18 +167,18 @@ export function useSelectionPopup(options: SelectionPopupOptions): SelectionPopu
         const active = document.activeElement
         if (active !== null && active !== document.body && !surface.contains(active)) return
       }
-      let insert = popupRef.current?.insert ?? null
-      if (insert === null) {
+      let payload: T | null = popupRef.current?.payload ?? null
+      if (payload === null) {
         try {
-          insert = resolveRef.current?.() ?? null
+          payload = resolveRef.current?.() ?? null
         } catch {
-          insert = null
+          payload = null
         }
       }
-      if (insert === null || insert.trim() === '') return
+      if (payload === null || (typeof payload === 'string' && payload.trim() === '')) return
       event.preventDefault()
       event.stopPropagation()
-      onCommitRef.current(insert)
+      onCommitRef.current(payload)
       hide()
     }
     const onDragStart = (event: DragEvent): void => {

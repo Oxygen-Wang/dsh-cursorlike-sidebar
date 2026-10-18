@@ -645,4 +645,10 @@ export const pl: Record<string, string> = {
   pluginTurnOutlineDesc: "Składa sesję w tury użytkownika (wejście + kroki narzędzi + wyjście); kliknij dowolny krok, aby przeskoczyć do dokładnego miejsca w rozmowie — bez wywołań LLM, tylko do odczytu",
   pluginDshMemoryDeltaName: 'dsh-memory-delta Pamięć',
   pluginDshMemoryDeltaDesc: 'Pamięć międzysesyjna: wstrzykiwane są tylko zmiany (nic, gdy nic się nie zmieniło), z przypomnieniem o terminie przeglądu, wyszukiwaniem według trafności i kartą w pasku bocznym.',
+  reviewChanged: 'File changed',
+  reviewKeep: 'Keep',
+  reviewReject: 'Revert',
+  reviewUndo: 'Undo',
+  reviewKept: 'Kept',
+  reviewRejected: 'Reverted',
 }

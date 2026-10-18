@@ -644,4 +644,10 @@ export const ar: Record<string, string> = {
   pluginTurnOutlineDesc: "يطوي الجلسة إلى جولات المستخدم (الإدخال + خطوات الأدوات + المخرجات)؛ انقر على أي خطوة للانتقال إلى موضعها الدقيق في المحادثة — بدون استدعاء LLM، للقراءة فقط",
   pluginDshMemoryDeltaName: 'dsh-memory-delta الذاكرة',
   pluginDshMemoryDeltaDesc: 'ذاكرة عبر الجلسات: يُحقن ما تغيّر فقط (ولا شيء عند عدم وجود تغيير)، مع تذكير بموعد المراجعة وبحث مرتّب حسب الصلة وتبويب في الشريط الجانبي.',
+  reviewChanged: 'File changed',
+  reviewKeep: 'Keep',
+  reviewReject: 'Revert',
+  reviewUndo: 'Undo',
+  reviewKept: 'Kept',
+  reviewRejected: 'Reverted',
 }

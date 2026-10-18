@@ -33,6 +33,7 @@
  * position (A|B + C + D → ACD|B).
  */
 import type { Context } from '../context-types.ts';
+import { type SelectionReference } from './selection-reference.ts';
 /** A resolved composer caret/selection in draft coordinates. */
 export interface DraftCaret {
     start: number;
@@ -111,6 +112,19 @@ export declare function directoryMention(relativePath: string): string | undefin
  * an unrepresentable path is a logged no-op; never guess from session cwd.
  */
 export declare function insertWorkspaceReference(ctx: Context, sessionId: string, path: string, isDir: boolean): boolean;
+/**
+ * Insert one selected-text reference: the file's native `@` chip followed by
+ * the ` line 12-18` suffix. The chip is inserted first so the reference stays
+ * a real DSH file link; the suffix is plain text (the host's `@` grammar has no
+ * line-range token of its own). When the workspace root cannot resolve the
+ * path, fall back to the absolute-path text form rather than dropping the
+ * gesture.
+ * @param ctx - the client context.
+ * @param sessionId - the session whose draft receives the reference.
+ * @param reference - the selected file and line span.
+ * @returns whether the draft was changed.
+ */
+export declare function insertSelectionReference(ctx: Context, sessionId: string, reference: SelectionReference): boolean;
 /**
  * Insert one FILE reference as a structured chip (like DSH's own `@` picker).
  * The chip displays `@<basename>` but serializes to `@<relative path>` on

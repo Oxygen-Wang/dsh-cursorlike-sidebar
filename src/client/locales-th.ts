@@ -643,4 +643,10 @@ export const th: Record<string, string> = {
   pluginTurnOutlineDesc: "พับเซสชันเป็นรอบของผู้ใช้ (อินพุต + ขั้นตอนเครื่องมือ + เอาต์พุต) คลิกขั้นตอนใดก็ได้เพื่อข้ามไปยังตำแหน่งที่แน่นอนในบทสนทนา — ไม่มีการเรียก LLM อ่านอย่างเดียว",
   pluginDshMemoryDeltaName: 'dsh-memory-delta หน่วยความจำ',
   pluginDshMemoryDeltaDesc: 'หน่วยความจำข้ามเซสชัน: ฉีดเฉพาะส่วนที่เปลี่ยนแปลง (ไม่มีการเปลี่ยนแปลงก็ไม่ฉีดเลย) พร้อมเตือนวันทบทวน ค้นหาตามความเกี่ยวข้อง และแท็บแถบข้าง',
+  reviewChanged: 'File changed',
+  reviewKeep: 'Keep',
+  reviewReject: 'Revert',
+  reviewUndo: 'Undo',
+  reviewKept: 'Kept',
+  reviewRejected: 'Reverted',
 }

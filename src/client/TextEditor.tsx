@@ -38,9 +38,12 @@ import { cmSurfaceTheme, CmThemeCompartment } from './cm-themes.ts'
 import { cmSearchExtensions, CmSearchPhrases } from './cm-search.ts'
 import { isDarkScheme, subscribeColorScheme } from './theme.ts'
 import { SandboxStatusBar } from './SandboxStatusBar.tsx'
-import { appendToDraft } from './conversation-draft.ts'
+import { insertSelectionReference } from './conversation-draft.ts'
 import { useSelectionPopup } from './selection-popup.ts'
-import { buildSelectionInsert, linesOfSelection } from './selection-payload.ts'
+import { linesOfSelection } from './selection-payload.ts'
+import type { SelectionReference } from './selection-reference.ts'
+import { writeSelectionDrag } from './cursorlike-interactions.ts'
+import { diffLines } from './diff/rows.ts'
 import { analyzeMarkdownHtml } from './markdown-html.ts'
 import { LazyMermaidMarkdown, MarkdownDocument, type MarkdownHtmlMedia } from './MarkdownHtml.tsx'
 import { LargeFileView } from './LargeFileView.tsx'
@@ -105,12 +108,45 @@ function sameDocument(a: string, b: string): boolean {
   return a === b || a.replace(/\r\n?/g, '\n') === b.replace(/\r\n?/g, '\n')
 }
 
+/**
+ * One pending agent/external edit shown in the inline review bar. `oldText`
+ * is the content the editor last displayed, `newText` the content the host
+ * just loaded; accepting only drops the review, rejecting writes `oldText`
+ * back, and either decision can be undone for a short window.
+ */
+interface EditorReview {
+  path: string
+  oldText: string
+  newText: string
+  added: number
+  removed: number
+}
+
+/** The most recent review decision, kept only for the undo window. */
+interface ReviewDecision {
+  review: EditorReview
+  kind: 'keep' | 'reject'
+}
+
 export function TextEditor(props: FileViewerProps) {
   const { ctx, scope, path, viewerId, content, size, largeFile, line } = props
   const [mode, setMode] = useState<ViewMode>('preview')
   /** The editor's current text (null while clean); preview renders this. */
   const [draft, setDraft] = useState<string | null>(null)
   const [dirty, setDirty] = useState(false)
+  const [review, setReview] = useState<EditorReview | null>(null)
+  const [reviewDecision, setReviewDecision] = useState<ReviewDecision | null>(null)
+  const reviewRef = useRef<EditorReview | null>(null)
+  const reviewBarRef = useRef<HTMLDivElement>(null)
+  /** Content/path seen by the last render, for agent-edit detection. */
+  const previousContentRef = useRef<{ path: string; text: string | undefined }>({ path, text: content })
+  /** The first content after a path switch is a load, never an agent edit. */
+  const skipReviewRef = useRef(false)
+  /** Set while a programmatic reject/undo replaces the document, so the
+   *  content-changed listener does not turn it into an unsaved draft. */
+  const suppressDirtyRef = useRef(false)
+  const dirtyRef = useRef(dirty)
+  dirtyRef.current = dirty
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'failed'>('idle')
   /** The save was refused because the file changed on disk (fs-conflict). */
   const [conflict, setConflict] = useState(false)
@@ -226,7 +262,7 @@ export function TextEditor(props: FileViewerProps) {
    * effort, see {@link linesOfSelection}); CodeMirror already knows its own
    * line numbers exactly.
    */
-  const resolveSelectionInsert = (): string | null => {
+  const resolveSelectionInsert = (): SelectionReference | null => {
     if (markdown && mode === 'preview') {
       const host = mdRef.current
       const sel = window.getSelection()
@@ -235,7 +271,8 @@ export function TextEditor(props: FileViewerProps) {
       if (!host.contains(sel.anchorNode) || !host.contains(sel.focusNode)) return null
       const text = sel.toString()
       if (text.trim() === '') return null
-      return buildSelectionInsert(path, scope.cwd, linesOfSelection(draft ?? content ?? '', text) ?? undefined, text)
+      const lines = linesOfSelection(draft ?? content ?? '', text)
+      return { path, lines: lines ?? undefined }
     }
     const view = viewRef.current
     if (view === null) return null
@@ -245,14 +282,17 @@ export function TextEditor(props: FileViewerProps) {
       // No selection: add the current line, exactly like Cursor's Ctrl+L.
       const lineAtCaret = doc.lineAt(selection.head)
       if (lineAtCaret.text.trim() === '') return null
-      return buildSelectionInsert(path, scope.cwd, { start: lineAtCaret.number, end: lineAtCaret.number }, lineAtCaret.text)
+      return { path, lines: { start: lineAtCaret.number, end: lineAtCaret.number } }
     }
     const text = view.state.sliceDoc(selection.from, selection.to)
     if (text.trim() === '') return null
-    return buildSelectionInsert(path, scope.cwd, {
-      start: doc.lineAt(selection.from).number,
-      end: doc.lineAt(selection.to).number,
-    }, text)
+    return {
+      path,
+      lines: {
+        start: doc.lineAt(selection.from).number,
+        end: doc.lineAt(selection.to).number,
+      },
+    }
   }
 
   /**
@@ -261,9 +301,11 @@ export function TextEditor(props: FileViewerProps) {
    * listeners (outside mousedown, Escape, hidden tab/window, surface
    * leaving the viewport) — see selection-popup.ts.
    */
-  const selectionPopup = useSelectionPopup({
+  const selectionPopup = useSelectionPopup<SelectionReference>({
     sessionId: scope.sessionId,
-    onCommit: (insert) => { appendToDraft(ctx, scope.sessionId, insert) },
+    onCommit: (reference) => { insertSelectionReference(ctx, scope.sessionId, reference) },
+    label: () => t('addToConversation'),
+    onDrag: (transfer, reference) => { writeSelectionDrag(transfer, scope.sessionId, reference) },
     // The surface that must stay on screen: the markdown preview container
     // in preview mode, the CodeMirror host otherwise. The editor branch is
     // only live while CodeMirror actually holds focus: its DOM text selection
@@ -317,6 +359,51 @@ export function TextEditor(props: FileViewerProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [content])
 
+  // Detect an agent/external edit: the host reloads `content` without the
+  // editor typing. The diff is shown in the review bar; accepting drops it,
+  // rejecting writes the previous bytes back (and both can be undone).
+  useEffect(() => {
+    const previous = previousContentRef.current
+    previousContentRef.current = { path, text: content }
+    if (content === undefined) return
+    if (previous.path !== path) {
+      reviewRef.current = null
+      setReview(null)
+      setReviewDecision(null)
+      skipReviewRef.current = true
+      return
+    }
+    if (skipReviewRef.current) {
+      skipReviewRef.current = false
+      return
+    }
+    if (previous.text === undefined || sameDocument(previous.text, content)) return
+    if (readOnly || dirtyRef.current) return
+    // Above this size the LCS table is not worth blocking the editor on;
+    // the Changes tab remains the diff surface for huge files.
+    if (previous.text.length + content.length > 400_000) return
+    let added = 0
+    let removed = 0
+    try {
+      const rows = diffLines(previous.text, content)
+      for (const row of rows) {
+        if (row.kind === 'add') added += 1
+        else if (row.kind === 'del') removed += 1
+        else if (row.kind === 'mod') { added += 1; removed += 1 }
+      }
+    } catch {
+      return
+    }
+    if (added + removed === 0) return
+    const active = reviewRef.current
+    const next: EditorReview = active === null
+      ? { path, oldText: previous.text, newText: content, added, removed }
+      : { ...active, newText: content, added, removed }
+    reviewRef.current = next
+    if (active === null) setReviewDecision(null)
+    setReview(next)
+  }, [content, path, readOnly])
+
   // A different file switches the remembered preview scroll position to that
   // file's own entry (first open: none, so the preview starts at the top).
   useEffect(() => {
@@ -366,7 +453,7 @@ export function TextEditor(props: FileViewerProps) {
         searchPhrases.of(),
         ...(language !== null ? [language] : []),
         CodeMirrorView.updateListener.of((update) => {
-          if (update.docChanged) {
+          if (update.docChanged && !suppressDirtyRef.current) {
             setDirty(true)
           }
         }),
@@ -413,10 +500,13 @@ export function TextEditor(props: FileViewerProps) {
             }
             const doc = update.state.doc
             selectionPopup.show(
-              buildSelectionInsert(path, scope.cwd, {
-                start: doc.lineAt(sel.from).number,
-                end: doc.lineAt(sel.to).number,
-              }, text),
+              {
+                path,
+                lines: {
+                  start: doc.lineAt(sel.from).number,
+                  end: doc.lineAt(sel.to).number,
+                },
+              },
               rect.left - window.scrollX + (rect.right - rect.left) / 2,
               rect.top - window.scrollY,
             )
@@ -426,7 +516,27 @@ export function TextEditor(props: FileViewerProps) {
     })
     const view = new CodeMirrorView({ state, parent: host })
     viewRef.current = view
+    // Native selection drags carry the structured file+line payload, not only
+    // the browser's plain text. The drop handler then inserts the same
+    // `@file line X-Y` reference as Ctrl+L.
+    const onDragStart = (event: DragEvent): void => {
+      if (event.dataTransfer === null) return
+      const selection = view.state.selection.main
+      if (selection.empty) return
+      const text = view.state.sliceDoc(selection.from, selection.to)
+      if (text.trim() === '') return
+      const doc = view.state.doc
+      writeSelectionDrag(event.dataTransfer, scope.sessionId, {
+        path,
+        lines: {
+          start: doc.lineAt(selection.from).number,
+          end: doc.lineAt(selection.to).number,
+        },
+      })
+    }
+    host.addEventListener('dragstart', onDragStart)
     return () => {
+      host.removeEventListener('dragstart', onDragStart)
       view.destroy()
       viewRef.current = null
       themeCompRef.current = null
@@ -804,7 +914,7 @@ export function TextEditor(props: FileViewerProps) {
     const rect = sel.getRangeAt(0).getBoundingClientRect()
     const lines = linesOfSelection(mdText, text)
     selectionPopup.show(
-      buildSelectionInsert(path, scope.cwd, lines ?? undefined, text),
+      { path, lines: lines ?? undefined },
       rect.left + rect.width / 2,
       rect.top,
     )
@@ -821,6 +931,100 @@ export function TextEditor(props: FileViewerProps) {
    *  unsaved edits survive the round trip. */
   const showingPreview = !readOnly && mode === 'preview' && (markdown || html || jsonl)
   const saveLabel = saveState === 'saving' ? t('loading') : saveState === 'saved' ? t('saved') : saveState === 'failed' ? t('saveFailed') : ''
+
+  /** Replace the live document when the host cannot reload it for us. */
+  const replaceEditorText = (text: string): void => {
+    suppressDirtyRef.current = true
+    setDraft(text)
+    setDirty(false)
+    const view = viewRef.current
+    if (view !== null) {
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } })
+    }
+    queueMicrotask(() => { suppressDirtyRef.current = false })
+  }
+
+  /** Accept the pending edit: keep the bytes on disk, drop the review. */
+  const keepReview = (): void => {
+    const current = reviewRef.current
+    if (current === null) return
+    reviewRef.current = null
+    setReview(null)
+    setReviewDecision({ review: current, kind: 'keep' })
+  }
+
+  /** Reject the pending edit: write the previous bytes back, then show it. */
+  const rejectReview = async (): Promise<void> => {
+    const current = reviewRef.current
+    if (current === null || dirtyRef.current) return
+    try {
+      const result = await api.fsWrite(scope, path, current.oldText, props.mtimeMs ?? mtimeRef.current)
+      if (typeof result.mtimeMs === 'number') mtimeRef.current = result.mtimeMs
+      reviewRef.current = null
+      setReview(null)
+      setReviewDecision({ review: current, kind: 'reject' })
+      replaceEditorText(current.oldText)
+    } catch {
+      setSaveState('failed')
+    }
+  }
+
+  /** Undo the last keep/reject: restore the review bar and (for reject) bytes. */
+  const undoReview = async (): Promise<void> => {
+    const decision = reviewDecision
+    if (decision === null) return
+    setReviewDecision(null)
+    if (decision.kind === 'keep') {
+      reviewRef.current = decision.review
+      setReview(decision.review)
+      return
+    }
+    try {
+      const result = await api.fsWrite(scope, path, decision.review.newText, props.mtimeMs ?? mtimeRef.current)
+      if (typeof result.mtimeMs === 'number') mtimeRef.current = result.mtimeMs
+      reviewRef.current = decision.review
+      setReview(decision.review)
+      replaceEditorText(decision.review.newText)
+    } catch {
+      setSaveState('failed')
+    }
+  }
+
+  // The undo window closes itself; a new review also replaces the old one.
+  useEffect(() => {
+    if (reviewDecision === null) return
+    const timer = window.setTimeout(() => { setReviewDecision(null) }, 8000)
+    return () => { window.clearTimeout(timer) }
+  }, [reviewDecision])
+
+  // Ctrl/Cmd+K keeps, Ctrl/Cmd+J rejects, Ctrl/Cmd+Z undoes the last decision.
+  // Only while the editor (or the review bar) owns focus; the composer and
+  // terminal keep their own keys.
+  useEffect(() => {
+    if (review === null && reviewDecision === null) return
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.defaultPrevented || event.isComposing || event.altKey) return
+      if (!(event.ctrlKey || event.metaKey)) return
+      const key = event.key.toLowerCase()
+      const active = document.activeElement
+      const inside = viewRef.current?.hasFocus === true || (reviewBarRef.current?.contains(active) === true)
+      if (!inside) return
+      if (review !== null && (key === 'k' || key === 'j')) {
+        event.preventDefault()
+        event.stopPropagation()
+        if (key === 'k') keepReview()
+        else void rejectReview()
+        return
+      }
+      if (reviewDecision !== null && key === 'z' && !event.shiftKey) {
+        event.preventDefault()
+        event.stopPropagation()
+        void undoReview()
+      }
+    }
+    document.addEventListener('keydown', onKey, true)
+    return () => { document.removeEventListener('keydown', onKey, true) }
+  })
   // Per-feature sandbox escape hatch: the global side card setting (warned)
   // plus a per-surface temporary unlock. The unlock state starts at the
   // "default unsafe" pref so a preview can open straight into the red
@@ -946,6 +1150,38 @@ export function TextEditor(props: FileViewerProps) {
           />
         </>
       )}
+      {(review !== null || reviewDecision !== null) && (
+        <div className={css.editorReviewDock} ref={reviewBarRef} role="status" aria-live="polite">
+          {review !== null && (
+            <div className={css.editorReviewBar}>
+              <span className={css.editorReviewText}>
+                {t('reviewChanged')}
+                <span className={css.editorReviewCounts}> +{review.added} / −{review.removed}</span>
+              </span>
+              <button type="button" className={css.editorReviewKeep} onClick={keepReview}>
+                {t('reviewKeep')} <kbd className={css.editorReviewKbd}>Ctrl+K</kbd>
+              </button>
+              <button
+                type="button"
+                className={css.editorReviewReject}
+                disabled={dirty}
+                title={dirty ? t('unsaved') : undefined}
+                onClick={() => { void rejectReview() }}
+              >
+                {t('reviewReject')} <kbd className={css.editorReviewKbd}>Ctrl+J</kbd>
+              </button>
+            </div>
+          )}
+          {reviewDecision !== null && (
+            <div className={css.editorReviewUndo}>
+              <span>{reviewDecision.kind === 'keep' ? t('reviewKept') : t('reviewRejected')}</span>
+              <button type="button" className={css.editorReviewUndoButton} onClick={() => { void undoReview() }}>
+                {t('reviewUndo')} <kbd className={css.editorReviewKbd}>Ctrl+Z</kbd>
+              </button>
+            </div>
+          )}
+        </div>
+      )}
       {jsonl && mode === 'preview' && (
         <LargeFileView
           scope={scope}
@@ -960,6 +1196,17 @@ export function TextEditor(props: FileViewerProps) {
           className={css.editorMd}
           ref={previewRef}
           onMouseUp={handlePreviewMouseUp}
+          onDragStart={(event) => {
+            const selection = window.getSelection()
+            if (selection === null || selection.isCollapsed || selection.anchorNode === null || selection.focusNode === null) return
+            if (mdRef.current === null || !mdRef.current.contains(selection.anchorNode) || !mdRef.current.contains(selection.focusNode)) return
+            const text = selection.toString()
+            if (text.trim() === '') return
+            writeSelectionDrag(event.dataTransfer, scope.sessionId, {
+              path,
+              lines: linesOfSelection(mdText, text) ?? undefined,
+            })
+          }}
           onScroll={(event) => {
             const el = event.currentTarget
             if (!restoringRef.current && el.scrollHeight > el.clientHeight) {

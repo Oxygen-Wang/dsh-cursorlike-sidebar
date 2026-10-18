@@ -26,18 +26,25 @@
  * caller preventDefaults it to keep the selection/caret alive until the
  * click commits (the hook's capture-phase listener runs first and must not
  * hide for it).
+ *
+ * The payload is generic: the code editor commits a `SelectionReference`
+ * (file + line span), while the popup tests use plain strings. The hook only
+ * renders a `label` and hands the payload to the caller's commit/drag
+ * callbacks.
  */
 import { type RefObject } from 'react';
 /** The floating "add to conversation" action: payload + viewport anchor. */
-export interface SelectionPopup {
-    insert: string;
+export interface SelectionPopup<T> {
+    payload: T;
+    /** Button text shown to the user. */
+    label: string;
     left: number;
     top: number;
 }
-export interface SelectionPopupOptions {
+export interface SelectionPopupOptions<T> {
     sessionId?: string;
-    /** Commit the payload into the composer draft (button click). */
-    onCommit(insert: string): void;
+    /** Commit the payload into the composer draft (button click / Ctrl+L). */
+    onCommit(payload: T): void;
     /**
      * The DOM surface that must stay on screen for the popup to live: the
      * markdown preview container in preview mode, the CodeMirror host
@@ -52,19 +59,23 @@ export interface SelectionPopupOptions {
      * selection, a whitespace-only one, or an unavailable surface) leaves the
      * key unhandled.
      */
-    resolve?(): string | null;
+    resolve?(): T | null;
+    /** Button text for one payload (defaults to `String(payload)`). */
+    label?(payload: T): string;
+    /** Serialize the payload when the user drags the floating button. */
+    onDrag?(transfer: DataTransfer, payload: T): void;
 }
-export interface SelectionPopupControls {
+export interface SelectionPopupControls<T> {
     drag(transfer: DataTransfer): void;
     /** The current popup (null = hidden). */
-    popup: SelectionPopup | null;
+    popup: SelectionPopup<T> | null;
     /** Attach to the portaled button element. */
     buttonRef: RefObject<HTMLButtonElement>;
     /** Anchor the popup above a selection (viewport-clamped). */
-    show(insert: string, left: number, top: number): void;
+    show(payload: T, left: number, top: number): void;
     /** Hide the popup (idempotent). */
     hide(): void;
     /** The button's click: commit the stored payload, then hide. */
     commit(): void;
 }
-export declare function useSelectionPopup(options: SelectionPopupOptions): SelectionPopupControls;
+export declare function useSelectionPopup<T>(options: SelectionPopupOptions<T>): SelectionPopupControls<T>;

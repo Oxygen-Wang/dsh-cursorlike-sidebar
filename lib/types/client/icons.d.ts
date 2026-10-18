@@ -38,3 +38,9 @@ export declare const IconSaveOutline16: ({ size, className }: IconProps) => impo
  * rendered monochrome via currentColor to follow the active skin.
  */
 export declare const IconVscode16: ({ size, className }: IconProps) => import("react").JSX.Element;
+/** Four-tile glyph: the file explorer's desktop-style icon view. */
+export declare const IconGridOutline16: ({ size, className }: IconProps) => import("react").JSX.Element;
+/** Three-row glyph: the file explorer's tree/list view. */
+export declare const IconListOutline16: ({ size, className }: IconProps) => import("react").JSX.Element;
+/** Left chevron: the icon view's first "back to parent" tile. */
+export declare const IconArrowLeftOutline16: ({ size, className }: IconProps) => import("react").JSX.Element;

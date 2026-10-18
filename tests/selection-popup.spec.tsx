@@ -66,7 +66,7 @@ function Harness(props: { onCommit: (insert: string) => void; resolve?: () => st
         ref: surface.buttonRef,
         'data-popup': true,
         onClick: surface.commit,
-      }, surface.popup.insert),
+      }, surface.popup.label),
       document.body,
     ),
   )

@@ -174,6 +174,10 @@ export declare const zh: {
     saveFailed: string;
     saveConflict: string;
     saveConflictReload: string;
+    reviewChanged: string;
+    reviewKeep: string;
+    reviewReject: string;
+    reviewUndo: string;
     previewOnlyNotice: string;
     largeFileEmpty: string;
     pagedLineRange: string;

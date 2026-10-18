@@ -1,7 +1,8 @@
 /** CursorLike drag references, isolated by originating DSH session. */
 import type { Context } from '../context-types.ts'
 import type { BetterSidebarService, SessionScope } from './service.ts'
-import { appendToDraft, insertWorkspaceReference, mentionFor } from './conversation-draft.ts'
+import { appendToDraft, insertSelectionReference, insertWorkspaceReference, mentionFor } from './conversation-draft.ts'
+import { referenceText, type SelectionReference } from './selection-reference.ts'
 import { relativeTo } from './paths.ts'
 
 export const CURSORLIKE_DRAG = 'application/x-cursorlike-context'
@@ -11,6 +12,9 @@ export interface CursorlikeDrag {
   sessionId: string
   cwd?: string
   paths: { path: string; directory: boolean }[]
+  /** Selected-text drags carry the line span with the path. */
+  lineStart?: number
+  lineEnd?: number
   text?: string
 }
 
@@ -22,10 +26,20 @@ export function writeReferenceDrag(transfer: DataTransfer, scope: SessionScope, 
   transfer.effectAllowed = 'copy'
 }
 
-/** Keep the ordinary selected text intact for drags inside the editor itself. */
-export function writeSelectionDrag(transfer: DataTransfer, sessionId: string, text: string): void {
-  transfer.setData(CURSORLIKE_DRAG, JSON.stringify({ version: 1, sessionId, paths: [], text } satisfies CursorlikeDrag))
-  if (!transfer.getData('text/plain')) transfer.setData('text/plain', text)
+/**
+ * Emit one selected-text reference drag. `paths` carries the file so a drop
+ * into the composer can mint the native `@file` chip; `lineStart/lineEnd`
+ * carry the range. The text/plain fallback mirrors what the user sees.
+ */
+export function writeSelectionDrag(transfer: DataTransfer, sessionId: string, reference: SelectionReference): void {
+  const value: CursorlikeDrag = {
+    version: 1,
+    sessionId,
+    paths: [{ path: reference.path, directory: false }],
+    ...(reference.lines === undefined ? {} : { lineStart: reference.lines.start, lineEnd: reference.lines.end }),
+  }
+  transfer.setData(CURSORLIKE_DRAG, JSON.stringify(value))
+  if (!transfer.getData('text/plain')) transfer.setData('text/plain', referenceText(reference))
 }
 
 export function readCursorlikeDrag(transfer: DataTransfer): CursorlikeDrag | undefined {
@@ -37,6 +51,9 @@ export function readCursorlikeDrag(transfer: DataTransfer): CursorlikeDrag | und
     if (value.version !== 1 || typeof value.sessionId !== 'string' || !Array.isArray(value.paths) || value.paths.length > 1000) return undefined
     if (value.cwd !== undefined && typeof value.cwd !== 'string') return undefined
     if (value.text !== undefined && typeof value.text !== 'string') return undefined
+    if (value.lineStart !== undefined && (!Number.isInteger(value.lineStart) || value.lineStart < 1)) return undefined
+    if (value.lineEnd !== undefined && (!Number.isInteger(value.lineEnd) || value.lineEnd < 1)) return undefined
+    if (value.lineStart !== undefined && value.lineEnd !== undefined && value.lineEnd < value.lineStart) return undefined
     if (!value.paths.every(item => item && typeof item.path === 'string' && typeof item.directory === 'boolean')) return undefined
     return value as CursorlikeDrag
   } catch {
@@ -68,7 +85,12 @@ export function installCursorlikeDrop(ctx: Context, service: Pick<BetterSidebarS
     // A retained background tab cannot drop a captured payload into another session's draft.
     if (!sessionId || value.sessionId !== sessionId) return
     if (destination === 'composer') {
-      if (value.text) appendToDraft(ctx, sessionId, value.text)
+      if (value.lineStart !== undefined && value.paths.length === 1 && value.paths[0] !== undefined) {
+        insertSelectionReference(ctx, sessionId, {
+          path: value.paths[0].path,
+          lines: { start: value.lineStart, end: value.lineEnd ?? value.lineStart },
+        })
+      } else if (value.text) appendToDraft(ctx, sessionId, value.text)
       else for (const item of value.paths) insertWorkspaceReference(ctx, sessionId, item.path, item.directory)
     } else {
       const scope: SessionScope = { sessionId, cwd: value.cwd }

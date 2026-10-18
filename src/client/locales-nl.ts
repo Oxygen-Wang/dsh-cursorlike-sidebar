@@ -641,4 +641,10 @@ export const nl: Record<string, string> = {
   pluginTurnOutlineDesc: "Vouwt de sessie op in gebruikersbeurten (invoer + toolstappen + uitvoer); klik op een stap om terug te springen naar de exacte plek in het gesprek — zonder LLM-aanroepen, alleen-lezen",
   pluginDshMemoryDeltaName: 'dsh-memory-delta Geheugen',
   pluginDshMemoryDeltaDesc: 'Geheugen tussen sessies: alleen wat is gewijzigd wordt geïnjecteerd (niets als er niets is gewijzigd), met herinnering aan de controledatum, relevantiegerangschikt zoeken en een zijbalktabblad.',
+  reviewChanged: 'File changed',
+  reviewKeep: 'Keep',
+  reviewReject: 'Revert',
+  reviewUndo: 'Undo',
+  reviewKept: 'Kept',
+  reviewRejected: 'Reverted',
 }
