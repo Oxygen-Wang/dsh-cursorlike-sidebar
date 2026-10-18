@@ -92,3 +92,30 @@ describe('linesOfSelection', () => {
     expect(linesOfSelection(source, '\n')).toBeNull()
   })
 })
+
+describe('linesOfSelection in a rendered Markdown preview', () => {
+  const markdown = [
+    '# 需求',
+    '- **修改后的差异块后面增加 **保留 / 撤销** 操作。**',
+    '- **快捷键：** `Ctrl+K` 保留，`Ctrl+J` 拒绝/撤销。',
+    '- **需要撤销机制：** 保留/拒绝之后还能恢复上一步。',
+    '- 注意：`Ctrl+K` 与内联 AI 冲突。',
+  ].join('\n')
+
+  it('strips bullets, emphasis and inline-code markers before matching', () => {
+    const selected = [
+      '修改后的差异块后面增加 保留 / 撤销 操作。',
+      '快捷键：Ctrl+K 保留，Ctrl+J 拒绝/撤销。',
+      '需要撤销机制：保留/拒绝之后还能恢复上一步。',
+    ].join('\n')
+    expect(linesOfSelection(markdown, selected)).toEqual({ start: 2, end: 4 })
+  })
+
+  it('matches a single rendered line to its formatted source line', () => {
+    expect(linesOfSelection(markdown, '快捷键：Ctrl+K 保留，Ctrl+J 拒绝/撤销。')).toEqual({ start: 3, end: 3 })
+  })
+
+  it('does not guess when the normalized text is ambiguous', () => {
+    expect(linesOfSelection('alpha\n**alpha**\n', 'alpha')).toBeNull()
+  })
+})
