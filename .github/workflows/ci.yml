@@ -7,6 +7,8 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -14,7 +16,9 @@ jobs:
           version: 11.8.0
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # pnpm 11.8.0 requires Node >= 22.13 (node:sqlite); Node 20 fails at
+          # `pnpm store path` before any project step runs.
+          node-version: 22
           cache: pnpm
       - name: Install the pinned DSH baseline
         env:
@@ -24,5 +28,7 @@ jobs:
         run: pnpm install --frozen-lockfile --ignore-scripts
       - name: Typecheck
         run: pnpm typecheck
+      - name: Build
+        run: pnpm build
       - name: Unit tests
         run: pnpm test:windows
