@@ -44,3 +44,5 @@ export declare const IconGridOutline16: ({ size, className }: IconProps) => impo
 export declare const IconListOutline16: ({ size, className }: IconProps) => import("react").JSX.Element;
 /** Left chevron: the icon view's first "back to parent" tile. */
 export declare const IconArrowLeftOutline16: ({ size, className }: IconProps) => import("react").JSX.Element;
+/** Three columns: the Miller (multi-column) file browser. */
+export declare const IconColumnsOutline16: ({ size, className }: IconProps) => import("react").JSX.Element;

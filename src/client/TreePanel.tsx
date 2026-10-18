@@ -27,8 +27,9 @@ import type { BetterSidebarService } from './service.ts'
 import { ancestorDirs } from './state.ts'
 import { FileTree } from './FileTree.tsx'
 import { FileGrid } from './FileGrid.tsx'
+import { FileColumns } from './FileColumns.tsx'
 import { DEFAULT_FILE_TREE_SORT, type FileTreeSort } from './file-tree-sort.ts'
-import { IconGridOutline16, IconListOutline16, IconUploadOutline16 } from './icons.tsx'
+import { IconColumnsOutline16, IconGridOutline16, IconListOutline16, IconUploadOutline16 } from './icons.tsx'
 import type { OpenInApp } from './open-in-app.ts'
 import type { OpenWithTarget } from './open-with.ts'
 import { t } from './locales.ts'
@@ -42,8 +43,8 @@ import {
 } from './upload.ts'
 import css from './sidebar.module.css'
 
-/** Files view preference (tree vs desktop-style icon grid). */
-type FilesView = 'tree' | 'grid'
+/** Files view preference (tree, desktop icon grid, or Miller columns). */
+type FilesView = 'tree' | 'grid' | 'columns'
 const FILES_VIEW_KEY = 'dsh-cursorlike-sidebar:files-view'
 
 /**
@@ -52,7 +53,8 @@ const FILES_VIEW_KEY = 'dsh-cursorlike-sidebar:files-view'
  */
 function readFilesView(): FilesView {
   try {
-    return localStorage.getItem(FILES_VIEW_KEY) === 'grid' ? 'grid' : 'tree'
+    const value = localStorage.getItem(FILES_VIEW_KEY)
+    return value === 'grid' || value === 'columns' ? value : 'tree'
   } catch {
     return 'tree'
   }
@@ -334,8 +336,14 @@ export function TreePanel(props: {
         />
         <IconButton
           label={t('files')}
-          icon={view === 'tree' ? <IconGridOutline16 size={14} /> : <IconListOutline16 size={14} />}
-          onClick={() => { changeView(view === 'tree' ? 'grid' : 'tree') }}
+          icon={view === 'tree'
+            ? <IconGridOutline16 size={14} />
+            : view === 'grid'
+              ? <IconColumnsOutline16 size={14} />
+              : <IconListOutline16 size={14} />}
+          onClick={() => {
+            changeView(view === 'tree' ? 'grid' : view === 'grid' ? 'columns' : 'tree')
+          }}
         />
         {/* Row order: the two keys are one choice (check mark), the
             folders-first switch is independent — the same two-group menu the
@@ -450,18 +458,32 @@ export function TreePanel(props: {
       </div>
       {/* The tree stays MOUNTED while searching: its level cache and the
           directory watcher survive a query, so clearing the box is free. */}
-      {view === 'grid' && !searching ? (
-        <FileGrid
-          sessionId={sessionId}
-          cwd={cwd}
-          exclude={effectiveExclude}
-          visible={visible !== false}
-          service={service}
-          onOpenFile={onOpenFile}
-          onOpenFileNewTab={onOpenFileNewTab}
-          onOpenFileSide={onOpenFileSide}
-          onReferenceFile={onReferenceFile}
-        />
+      {view !== 'tree' && !searching ? (
+        view === 'grid' ? (
+          <FileGrid
+            sessionId={sessionId}
+            cwd={cwd}
+            exclude={effectiveExclude}
+            visible={visible !== false}
+            service={service}
+            onOpenFile={onOpenFile}
+            onOpenFileNewTab={onOpenFileNewTab}
+            onOpenFileSide={onOpenFileSide}
+            onReferenceFile={onReferenceFile}
+          />
+        ) : (
+          <FileColumns
+            sessionId={sessionId}
+            cwd={cwd}
+            exclude={effectiveExclude}
+            visible={visible !== false}
+            service={service}
+            onOpenFile={onOpenFile}
+            onOpenFileNewTab={onOpenFileNewTab}
+            onOpenFileSide={onOpenFileSide}
+            onReferenceFile={onReferenceFile}
+          />
+        )
       ) : (
       <FileTree
         sessionId={sessionId}

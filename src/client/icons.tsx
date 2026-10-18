@@ -131,3 +131,12 @@ export const IconArrowLeftOutline16 = ({ size = 16, className }: IconProps) => (
     <path d="M9.8 3.4 5.2 8l4.6 4.6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
   </svg>
 )
+
+/** Three columns: the Miller (multi-column) file browser. */
+export const IconColumnsOutline16 = ({ size = 16, className }: IconProps) => (
+  <svg width={size} height={size} className={className} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <rect x="1.5" y="2.5" width="3.6" height="11" rx="1" stroke="currentColor" strokeWidth="1.4" />
+    <rect x="6.2" y="2.5" width="3.6" height="11" rx="1" stroke="currentColor" strokeWidth="1.4" />
+    <rect x="10.9" y="2.5" width="3.6" height="11" rx="1" stroke="currentColor" strokeWidth="1.4" />
+  </svg>
+)

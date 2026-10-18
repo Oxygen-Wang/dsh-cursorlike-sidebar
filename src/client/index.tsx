@@ -28,6 +28,9 @@ import { registerSettingsNavIcon } from './settings-nav-icon.ts'
 import { loadBootDecision } from './prefs.ts'
 import { SideCardSection } from './SideCardSection.tsx'
 import { api } from './api.ts'
+import { installDiffApprovalPolish } from './diff-approval-polish.ts'
+
+installDiffApprovalPolish()
 import { LOCALE_NS, attachLocale, attachBetterLocale, t, zh, en } from './locales.ts'
 import { loadChunk } from './chunk-loader.ts'
 import css from './sidebar.module.css'
