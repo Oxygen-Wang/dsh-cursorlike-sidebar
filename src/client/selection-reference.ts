@@ -22,6 +22,8 @@ export interface SelectionReference {
   path: string
   /** The selected source lines; absent when the source line is unknown. */
   lines?: SelectionLines
+  /** The selected text, used as the fallback body when lines are unknown. */
+  text?: string
 }
 
 /**
@@ -34,6 +36,20 @@ export function lineSuffix(lines?: SelectionLines): string {
   const start = Math.max(1, Math.trunc(lines.start))
   const end = Math.max(start, Math.trunc(lines.end))
   return end > start ? ` line ${start}-${end}` : ` line ${start}`
+}
+
+/**
+ * What follows the native file chip: the line suffix when the source span is
+ * known, otherwise the selected text as a body (the "no line number, add the
+ * content" fallback).
+ * @param reference - the selected file/line/text.
+ * @returns `' line 12-18'`, `'\\n\\ntext'`, or `''`.
+ */
+export function selectionInsertBody(reference: SelectionReference): string {
+  const suffix = lineSuffix(reference.lines)
+  if (suffix !== '') return suffix
+  const text = reference.text?.trim() ?? ''
+  return text === '' ? '' : `\n\n${text}`
 }
 
 /**

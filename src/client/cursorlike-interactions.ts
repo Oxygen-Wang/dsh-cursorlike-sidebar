@@ -37,6 +37,7 @@ export function writeSelectionDrag(transfer: DataTransfer, sessionId: string, re
     sessionId,
     paths: [{ path: reference.path, directory: false }],
     ...(reference.lines === undefined ? {} : { lineStart: reference.lines.start, lineEnd: reference.lines.end }),
+    ...(reference.lines === undefined && reference.text !== undefined ? { text: reference.text } : {}),
   }
   transfer.setData(CURSORLIKE_DRAG, JSON.stringify(value))
   if (!transfer.getData('text/plain')) transfer.setData('text/plain', referenceText(reference))
@@ -89,6 +90,11 @@ export function installCursorlikeDrop(ctx: Context, service: Pick<BetterSidebarS
         insertSelectionReference(ctx, sessionId, {
           path: value.paths[0].path,
           lines: { start: value.lineStart, end: value.lineEnd ?? value.lineStart },
+        })
+      } else if (value.paths.length === 1 && value.paths[0] !== undefined && value.text) {
+        insertSelectionReference(ctx, sessionId, {
+          path: value.paths[0].path,
+          text: value.text,
         })
       } else if (value.text) appendToDraft(ctx, sessionId, value.text)
       else for (const item of value.paths) insertWorkspaceReference(ctx, sessionId, item.path, item.directory)

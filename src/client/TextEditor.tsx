@@ -363,7 +363,7 @@ export function TextEditor(props: FileViewerProps) {
       const text = sel.toString()
       if (text.trim() === '') return null
       const lines = linesOfSelection(draft ?? content ?? '', text)
-      return { path, lines: lines ?? undefined }
+      return { path, lines: lines ?? undefined, text }
     }
     const view = viewRef.current
     if (view === null) return null

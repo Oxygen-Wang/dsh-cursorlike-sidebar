@@ -34,7 +34,7 @@
  */
 import type { Context, SidebarConversation } from '../context-types.ts'
 import { baseName, workspaceRelativePath } from './paths.ts'
-import { lineSuffix, referenceText, type SelectionReference } from './selection-reference.ts'
+import { referenceText, selectionInsertBody, type SelectionReference } from './selection-reference.ts'
 
 /** A resolved composer caret/selection in draft coordinates. */
 export interface DraftCaret {
@@ -287,10 +287,15 @@ export function insertSelectionReference(
   sessionId: string,
   reference: SelectionReference,
 ): boolean {
-  const suffix = lineSuffix(reference.lines)
+  // No line numbers (typically a Markdown preview whose source line could not
+  // be identified): add the selected text itself, after the file reference, so
+  // the reader still gets the content instead of a bare path.
+  const body = selectionInsertBody(reference)
   const inserted = insertWorkspaceReference(ctx, sessionId, reference.path, false)
-  if (inserted) return suffix === '' ? true : appendToDraft(ctx, sessionId, suffix)
-  return appendToDraft(ctx, sessionId, referenceText(reference))
+  if (inserted) return body === '' ? true : appendToDraft(ctx, sessionId, body)
+  return appendToDraft(ctx, sessionId, reference.lines !== undefined
+    ? referenceText(reference)
+    : `@${reference.path}${body}`)
 }
 
 /**
