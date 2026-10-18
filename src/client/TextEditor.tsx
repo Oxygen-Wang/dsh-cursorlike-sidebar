@@ -16,8 +16,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 import clsx from 'clsx'
-import { EditorState } from '@codemirror/state'
-import { EditorView as CodeMirrorView, keymap, lineNumbers } from '@codemirror/view'
+import { EditorState, StateEffect, StateField } from '@codemirror/state'
+import { Decoration, EditorView as CodeMirrorView, keymap, lineNumbers, WidgetType, type DecorationSet } from '@codemirror/view'
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import { openSearchPanel } from '@codemirror/search'
 import { IconCheckOutlineRegular, IconSearchOutlineRegular, MarkdownDelegateProvider, MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -120,6 +120,8 @@ interface EditorReview {
   newText: string
   added: number
   removed: number
+  /** 1-based line after which the inline Keep/Revert bar sits. */
+  lastLine: number
 }
 
 /** The most recent review decision, kept only for the undo window. */
@@ -127,6 +129,95 @@ interface ReviewDecision {
   review: EditorReview
   kind: 'keep' | 'reject'
 }
+
+/** The payload carried into CodeMirror's inline review widget. */
+interface InlineReviewInfo extends EditorReview {
+  pos: number
+  /** A dirty draft must not be overwritten by a revert. */
+  revertDisabled: boolean
+  onKeep: () => void
+  onReject: () => void
+}
+
+const setInlineReview = StateEffect.define<InlineReviewInfo | null>()
+
+/**
+ * The action row rendered in the document flow after the last changed line.
+ * Keeping it as a CodeMirror widget means it also pushes the following lines
+ * down (instead of covering them) and scrolls with the text.
+ */
+class ReviewWidget extends WidgetType {
+  constructor(private readonly info: InlineReviewInfo) {
+    super()
+  }
+
+  override eq(other: ReviewWidget): boolean {
+    return other.info.path === this.info.path
+      && other.info.lastLine === this.info.lastLine
+      && other.info.added === this.info.added
+      && other.info.removed === this.info.removed
+      && other.info.revertDisabled === this.info.revertDisabled
+      && other.info.oldText.length === this.info.oldText.length
+      && other.info.newText.length === this.info.newText.length
+  }
+
+  override ignoreEvent(): boolean {
+    return true
+  }
+
+  override toDOM(): HTMLElement {
+    const wrap = document.createElement('div')
+    wrap.className = css.editorReviewInline ?? ''
+    wrap.dataset.cursorlikeReviewActions = ''
+    wrap.contentEditable = 'false'
+
+    const text = document.createElement('span')
+    text.className = css.editorReviewText ?? ''
+    text.textContent = `${t('reviewChanged')}  +${this.info.added} / −${this.info.removed}`
+    wrap.append(text)
+
+    const keep = document.createElement('button')
+    keep.type = 'button'
+    keep.className = css.editorReviewKeep ?? ''
+    keep.textContent = `${t('reviewKeep')} Ctrl+K`
+    keep.addEventListener('click', (event) => {
+      event.preventDefault()
+      event.stopPropagation()
+      this.info.onKeep()
+    })
+    wrap.append(keep)
+
+    const revert = document.createElement('button')
+    revert.type = 'button'
+    revert.className = css.editorReviewReject ?? ''
+    revert.textContent = `${t('reviewReject')} Ctrl+J`
+    revert.disabled = this.info.revertDisabled
+    if (this.info.revertDisabled) revert.title = t('unsaved')
+    revert.addEventListener('click', (event) => {
+      event.preventDefault()
+      event.stopPropagation()
+      this.info.onReject()
+    })
+    wrap.append(revert)
+    return wrap
+  }
+}
+
+/** Decorations holding at most one inline review action row. */
+const inlineReviewField = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(decorations, transaction) {
+    let next = decorations.map(transaction.changes)
+    for (const effect of transaction.effects) {
+      if (!effect.is(setInlineReview)) continue
+      next = effect.value === null
+        ? Decoration.none
+        : Decoration.set([Decoration.widget({ widget: new ReviewWidget(effect.value), side: 1 }).range(effect.value.pos)])
+    }
+    return next
+  },
+  provide: field => CodeMirrorView.decorations.from(field),
+})
 
 export function TextEditor(props: FileViewerProps) {
   const { ctx, scope, path, viewerId, content, size, largeFile, line } = props
@@ -384,12 +475,14 @@ export function TextEditor(props: FileViewerProps) {
     if (previous.text.length + content.length > 400_000) return
     let added = 0
     let removed = 0
+    let lastLine = 1
     try {
       const rows = diffLines(previous.text, content)
       for (const row of rows) {
         if (row.kind === 'add') added += 1
         else if (row.kind === 'del') removed += 1
         else if (row.kind === 'mod') { added += 1; removed += 1 }
+        if (row.newLine !== undefined && row.kind !== 'context' && row.kind !== 'meta') lastLine = row.newLine
       }
     } catch {
       return
@@ -397,8 +490,8 @@ export function TextEditor(props: FileViewerProps) {
     if (added + removed === 0) return
     const active = reviewRef.current
     const next: EditorReview = active === null
-      ? { path, oldText: previous.text, newText: content, added, removed }
-      : { ...active, newText: content, added, removed }
+      ? { path, oldText: previous.text, newText: content, added, removed, lastLine }
+      : { ...active, newText: content, added, removed, lastLine }
     reviewRef.current = next
     if (active === null) setReviewDecision(null)
     setReview(next)
@@ -433,6 +526,7 @@ export function TextEditor(props: FileViewerProps) {
       doc: content,
       extensions: [
         CodeMirrorView.lineWrapping,
+        inlineReviewField,
         // The change bar sits BEFORE the line numbers (VS Code's own order):
         // a thin colored bar at the far left, the number tinted beside it.
         // The compartment carries all of it (hover blame included), so the
@@ -990,6 +1084,28 @@ export function TextEditor(props: FileViewerProps) {
     }
   }
 
+  // Publish the pending review into the CodeMirror document as an inline
+  // action row after the last changed line. The view outlives React renders;
+  // the effect only mutates its decorations.
+  useEffect(() => {
+    const view = viewRef.current
+    if (view === null) return
+    if (review === null) {
+      view.dispatch({ effects: setInlineReview.of(null) })
+      return
+    }
+    const line = Math.min(Math.max(1, review.lastLine), view.state.doc.lines)
+    view.dispatch({
+      effects: setInlineReview.of({
+        ...review,
+        pos: view.state.doc.line(line).to,
+        revertDisabled: dirty,
+        onKeep: keepReview,
+        onReject: () => { void rejectReview() },
+      }),
+    })
+  }, [review, content, dirty])
+
   // The undo window closes itself; a new review also replaces the old one.
   useEffect(() => {
     if (reviewDecision === null) return
@@ -1007,7 +1123,8 @@ export function TextEditor(props: FileViewerProps) {
       if (!(event.ctrlKey || event.metaKey)) return
       const key = event.key.toLowerCase()
       const active = document.activeElement
-      const inside = viewRef.current?.hasFocus === true || (reviewBarRef.current?.contains(active) === true)
+      const inlineActions = active instanceof Element && active.closest('[data-cursorlike-review-actions]') !== null
+      const inside = viewRef.current?.hasFocus === true || (reviewBarRef.current?.contains(active) === true) || inlineActions
       if (!inside) return
       if (review !== null && (key === 'k' || key === 'j')) {
         event.preventDefault()
@@ -1150,36 +1267,14 @@ export function TextEditor(props: FileViewerProps) {
           />
         </>
       )}
-      {(review !== null || reviewDecision !== null) && (
+      {reviewDecision !== null && (
         <div className={css.editorReviewDock} ref={reviewBarRef} role="status" aria-live="polite">
-          {review !== null && (
-            <div className={css.editorReviewBar}>
-              <span className={css.editorReviewText}>
-                {t('reviewChanged')}
-                <span className={css.editorReviewCounts}> +{review.added} / −{review.removed}</span>
-              </span>
-              <button type="button" className={css.editorReviewKeep} onClick={keepReview}>
-                {t('reviewKeep')} <kbd className={css.editorReviewKbd}>Ctrl+K</kbd>
-              </button>
-              <button
-                type="button"
-                className={css.editorReviewReject}
-                disabled={dirty}
-                title={dirty ? t('unsaved') : undefined}
-                onClick={() => { void rejectReview() }}
-              >
-                {t('reviewReject')} <kbd className={css.editorReviewKbd}>Ctrl+J</kbd>
-              </button>
-            </div>
-          )}
-          {reviewDecision !== null && (
-            <div className={css.editorReviewUndo}>
-              <span>{reviewDecision.kind === 'keep' ? t('reviewKept') : t('reviewRejected')}</span>
-              <button type="button" className={css.editorReviewUndoButton} onClick={() => { void undoReview() }}>
-                {t('reviewUndo')} <kbd className={css.editorReviewKbd}>Ctrl+Z</kbd>
-              </button>
-            </div>
-          )}
+          <div className={css.editorReviewUndo}>
+            <span>{reviewDecision.kind === 'keep' ? t('reviewKept') : t('reviewRejected')}</span>
+            <button type="button" className={css.editorReviewUndoButton} onClick={() => { void undoReview() }}>
+              {t('reviewUndo')} <kbd className={css.editorReviewKbd}>Ctrl+Z</kbd>
+            </button>
+          </div>
         </div>
       )}
       {jsonl && mode === 'preview' && (

@@ -58,6 +58,7 @@ describe('TextEditor review bar', () => {
     try {
       mounted.rerender(createElement(TextEditor, viewerProps({ content: 'const a = 2\n', mtimeMs: 124 })))
       expect(mounted.container.textContent).toContain('File changed')
+      expect(mounted.container.querySelector('[data-cursorlike-review-actions]')).not.toBeNull()
       expect(button(mounted.container, 'Keep')).toBeDefined()
       expect(button(mounted.container, 'Revert')).toBeDefined()
 
