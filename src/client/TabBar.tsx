@@ -196,6 +196,7 @@ export function TabBar(props: {
     <div
       className={clsx(css.tabBar, dragOver && css.tabBarDrop)}
       onDragOver={(event) => {
+        if (!event.dataTransfer.types.includes(TAB_DRAG_TYPE)) return
         // The strip owns drops on itself (merge into this pane); stopping
         // propagation keeps the pane root from also running its edge-zone
         // handler on the same drop.
@@ -205,6 +206,7 @@ export function TabBar(props: {
       }}
       onDragLeave={() => { setDragOver(false) }}
       onDrop={(event) => {
+        if (!event.dataTransfer.types.includes(TAB_DRAG_TYPE)) return
         event.preventDefault()
         event.stopPropagation()
         setDragOver(false)
@@ -227,8 +229,12 @@ export function TabBar(props: {
               event.dataTransfer.effectAllowed = 'move'
             }}
             onDragEnd={() => { setTabDragging(false); setDragOver(false) }}
-            onDragOver={(event) => { event.preventDefault(); event.stopPropagation() }}
+            onDragOver={(event) => {
+              if (!event.dataTransfer.types.includes(TAB_DRAG_TYPE)) return
+              event.preventDefault(); event.stopPropagation()
+            }}
             onDrop={(event) => {
+              if (!event.dataTransfer.types.includes(TAB_DRAG_TYPE)) return
               event.preventDefault()
               event.stopPropagation()
               setTabDragging(false)

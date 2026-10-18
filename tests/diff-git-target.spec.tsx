@@ -57,6 +57,33 @@ async function flushEffects(): Promise<void> {
 afterEach(() => { vi.restoreAllMocks() })
 
 describe('useGitDiffTarget through the inline preview pane (DiffPane)', () => {
+  it('reviews worktree lines, writes one rejection and restores decisions on restart', async () => {
+    localStorage.clear()
+    Object.defineProperty(navigator, 'language', { value: 'en-US', configurable: true })
+    vi.spyOn(api, 'gitDiff').mockResolvedValue({ diff: TWO_GAP_PATCH })
+    vi.spyOn(api, 'gitShow').mockResolvedValue({ content: 'old\ntail\nend\n' })
+    let disk = 'new\ntail2\nend2\n'
+    vi.spyOn(api, 'fsRead').mockImplementation(async () => ({ kind: 'text', content: disk, size: disk.length, mtimeMs: 7 }))
+    const write = vi.spyOn(api, 'fsWrite').mockImplementation(async (_scope, _path, content) => {
+      disk = content
+      return { ok: true, mtimeMs: 8 }
+    })
+    const { renderRoot } = await import('./test-utils.ts')
+    const props = { ctx: {} as Context, sessionId: 's1', cwd: '/p', diff: { kind: 'worktree' as const, path: 'src/a.ts', staged: false } }
+    const first = renderRoot(createElement(DiffTab, props))
+    await flushEffects()
+    expect(first.container.querySelectorAll('button[data-action="reject"]')).toHaveLength(1)
+    act(() => { first.container.querySelector<HTMLButtonElement>('button[data-action="reject"]')!.click() })
+    await flushEffects()
+    expect(write).toHaveBeenCalledTimes(1)
+    expect(disk).toBe('old\ntail\nend\n')
+    first.unmount()
+    const second = renderRoot(createElement(DiffTab, props))
+    await flushEffects()
+    expect(second.container.querySelectorAll('button[data-action="reject"]')).toHaveLength(1)
+    expect(second.container.querySelector('button[data-action="reject"][data-current="true"]')).not.toBeNull()
+    second.unmount()
+  })
   it('falls back to the other side when the requested side has no diff', async () => {
     const worktree: SidebarDiffRef = { kind: 'worktree', path: 'src/a.ts', staged: false }
     const gitDiff = vi.spyOn(api, 'gitDiff').mockImplementation(async (_scope, _path, staged) => ({

@@ -191,7 +191,7 @@ describe('FileTree delete confirmation', () => {
     clickMenuitem('Delete')
     const dialog = document.querySelector('[role="dialog"]')
     expect(dialog?.textContent).toContain('Delete "a.ts"?')
-    expect(dialog?.textContent).toContain('permanently deletes the file')
+    expect(dialog?.textContent).toContain('Use Undo to restore')
     const confirm = [...document.querySelectorAll<HTMLElement>('button')].find(el => el.textContent === 'Delete' && el.closest('[role="dialog"]') !== null)!
     await act(async () => { confirm.click() })
     expect(fsRemove).toHaveBeenCalledWith({ sessionId: 's1', cwd: '/tmp' }, '/tmp/a.ts')
@@ -199,12 +199,12 @@ describe('FileTree delete confirmation', () => {
     expect(document.querySelector('[role="dialog"]')).toBeNull()
   })
 
-  it('the directory copy names the recursive wipe', async () => {
+  it('explains that a removed directory can be recovered', async () => {
     harness = await mountTree()
     openMenu(harness.container, 'sub')
     clickMenuitem('Delete')
     const dialog = document.querySelector('[role="dialog"]')
-    expect(dialog?.textContent).toContain('everything inside it')
+    expect(dialog?.textContent).toContain('recovery storage')
   })
 
   it('cancel closes the modal without calling anything', async () => {

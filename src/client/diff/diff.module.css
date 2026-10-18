@@ -27,6 +27,49 @@
 .row .text { flex: 1; min-width: 0; white-space: pre-wrap; word-break: break-word; }
 .row[data-folded='true'] .text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
+/* The active hunk of the changes tab's per-hunk review: the block the bar's
+   Keep/Revert acts on. A neutral brand outline, not green/red, because the
+   row's own kind tint already carries the direction of the change. */
+.row.reviewActiveRow {
+  box-shadow: inset 0 0 0 1px var(--dsw-alias-brand-primary), inset 2px 0 0 var(--dsw-alias-brand-primary);
+}
+
+/* Accepted blocks read as normal source; undo restores the pending tint. */
+.row[data-review-decision='keep'] { background: var(--dsw-alias-bg-base); }
+.row[data-review-decision='keep'] .text, .row[data-review-decision='keep'] .sign { color: var(--dsw-alias-label-primary); }
+.row[data-review-decision='keep'] .inlineChange { background: transparent; }
+.row[data-review-decision='keep'][data-review-side='old'] { display: none; }
+
+/* A reverted block in the changes tab's snapshot diff: still visible (the
+   list is the agent's record), but clearly resolved. */
+.row.reviewRejectedRow { opacity: 0.45; }
+.row.reviewRejectedRow .text { text-decoration: line-through; }
+
+/* Per-line confirm controls (one keep + one reject per changed line). They
+   sit between the diff sign and the code so the text keeps its column. */
+.rowActions { flex: none; display: inline-flex; align-items: center; gap: 2px; padding: 0 2px; user-select: none; }
+.lineAction {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+}
+.lineAction[data-action='keep'] { color: var(--dsw-alias-state-success-primary); border-color: color-mix(in srgb, var(--dsw-alias-state-success-primary) 50%, var(--dsw-alias-border-l1)); }
+.lineAction[data-action='reject'] { color: var(--dsw-alias-state-error-primary); border-color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 50%, var(--dsw-alias-border-l1)); }
+.lineAction:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); }
+.lineAction:focus-visible { outline: 2px solid var(--dsw-alias-interactive-bg-hover-accent); outline-offset: 1px; }
+.lineAction[data-current='true'] { background: color-mix(in srgb, currentColor 16%, transparent); }
+.lineAction:disabled { opacity: 0.4; cursor: default; }
+
 /* The `\ No newline at end of file` marker row attached to a hunk's tail. */
 .row[data-kind='meta'] .metaText { color: var(--dsw-alias-label-tertiary); font-style: italic; }
 

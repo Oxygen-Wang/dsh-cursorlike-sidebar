@@ -8,14 +8,14 @@
  * never re-implements hidden-file policy: it asks `fs.tree` for the directory
  * and renders exactly the rows the tree would show.
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react'
-import { createPortal } from 'react-dom'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import clsx from 'clsx'
 import { IconRefreshOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import { api, mediaUrl, type FsEntry, type SessionScope } from './api.ts'
 import type { BetterSidebarService } from './service.ts'
 import { builtinFileIcon, builtinFolderIcon } from './file-icons.tsx'
-import { writeReferenceDrag } from './cursorlike-interactions.ts'
+import { useFileBrowserActions, type FileBrowserActionsProps } from './file-browser-actions.tsx'
+import { DEFAULT_FILE_TREE_SORT, sortEntries, type FileTreeSort } from './file-tree-sort.ts'
 import { baseName, isWithinWorkspace, relativeTo, resolveSidebarPath } from './paths.ts'
 import { t } from './locales.ts'
 import { IconArrowLeftOutline16 } from './icons.tsx'
@@ -44,13 +44,7 @@ function columnsForIconSize(size: number): number {
   return 3
 }
 
-interface GridMenuState {
-  entry: FsEntry
-  x: number
-  y: number
-}
-
-export function FileGrid(props: {
+export function FileGrid(props: FileBrowserActionsProps & {
   sessionId: string
   cwd: string | undefined
   exclude?: readonly string[]
@@ -63,11 +57,13 @@ export function FileGrid(props: {
   onOpenFileNewTab?: (path: string) => void
   onOpenFileSide?: (path: string) => void
   onReferenceFile: (path: string, isDir: boolean) => void
+  refreshTick?: number
+  sort?: FileTreeSort
 }) {
   const {
     sessionId, cwd, exclude, visible, service,
     iconSize, onIconSizeChange,
-    onOpenFile, onOpenFileNewTab, onOpenFileSide, onReferenceFile,
+    onOpenFile,
   } = props
   const [currentDir, setCurrentDir] = useState<string | undefined>(cwd)
   const [entries, setEntries] = useState<FsEntry[]>([])
@@ -75,9 +71,7 @@ export function FileGrid(props: {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [refreshTick, setRefreshTick] = useState(0)
-  const [menu, setMenu] = useState<GridMenuState | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
-  const menuRef = useRef<HTMLDivElement>(null)
   const excludeKey = (exclude ?? []).join('\0')
 
   useEffect(() => {
@@ -110,22 +104,7 @@ export function FileGrid(props: {
         setError(failure instanceof Error ? failure.message : String(failure))
       })
     return () => controller.abort()
-  }, [sessionId, cwd, currentDir, excludeKey, refreshTick, visible])
-
-  useEffect(() => {
-    if (menu === null) return
-    const close = (event: MouseEvent): void => {
-      if (menuRef.current?.contains(event.target as Node) === true) return
-      setMenu(null)
-    }
-    const onKey = (event: KeyboardEvent): void => { if (event.key === 'Escape') setMenu(null) }
-    document.addEventListener('mousedown', close, true)
-    document.addEventListener('keydown', onKey, true)
-    return () => {
-      document.removeEventListener('mousedown', close, true)
-      document.removeEventListener('keydown', onKey, true)
-    }
-  }, [menu])
+  }, [sessionId, cwd, currentDir, excludeKey, refreshTick, visible, props.refreshTick])
 
   // Ctrl/Cmd+wheel over the grid changes the icon/thumbnail size. The native
   // listener (not React's passive wheel) can preventDefault so the browser
@@ -168,6 +147,8 @@ export function FileGrid(props: {
   }, [atRoot, cwd, currentDir])
 
   const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void => {
+    actions.keyDown(event)
+    if (event.defaultPrevented || (event.target as HTMLElement).closest('input,textarea,[contenteditable="true"]')) return
     if ((event.key === 'Backspace' || (event.altKey && event.key === 'ArrowLeft'))) {
       event.preventDefault()
       goBack()
@@ -178,6 +159,8 @@ export function FileGrid(props: {
     if (entry.isDir) setCurrentDir(entry.path)
     else onOpenFile(entry.path)
   }
+  const sorted = useMemo(() => sortEntries(entries, props.sort ?? DEFAULT_FILE_TREE_SORT), [entries, props.sort])
+  const actions = useFileBrowserActions(props, currentDir, sorted, openEntry, () => setRefreshTick(tick => tick + 1), columns)
 
   const iconFor = (entry: FsEntry): ReactNode => {
     if (entry.isDir) {
@@ -191,20 +174,21 @@ export function FileGrid(props: {
     return mediaUrl(scope, entry.path)
   }
 
-  const copyPath = (path: string): void => {
-    void navigator.clipboard?.writeText(path).catch(() => { /* clipboard unavailable */ })
-    setMenu(null)
-  }
-
   return (
-    <div className={css.fileGridRoot} ref={rootRef} tabIndex={0} onKeyDown={onKeyDown} data-cursorlike-file-grid="">
+    <div className={css.fileGridRoot} ref={rootRef} tabIndex={0} onKeyDown={onKeyDown} data-cursorlike-file-grid=""
+      data-cursorlike-drop-dir={currentDir}
+      onContextMenu={event => actions.contextMenu(event)} onDragOver={actions.dragOver} onDrop={event => actions.drop(event)}>
       <div className={css.fileGridHeader}>
+        <span data-cursorlike-drop-dir={atRoot ? undefined : parentOf(currentDir)} data-cursorlike-parent=""
+          onDragOver={atRoot ? undefined : actions.dragOver}
+          onDrop={atRoot ? undefined : event => actions.drop(event, parentOf(currentDir))}>
         <IconButton
           label={t('parent')}
           icon={<IconArrowLeftOutline16 size={14} />}
           disabled={atRoot}
           onClick={goBack}
         />
+        </span>
         <div className={css.fileGridCrumbs}>
           {crumbs.map((crumb, index) => (
             <button
@@ -212,7 +196,10 @@ export function FileGrid(props: {
               type="button"
               className={css.fileGridCrumb}
               title={crumb.path}
+              data-cursorlike-drop-dir={crumb.path}
               onClick={() => setCurrentDir(crumb.path)}
+              onDragOver={actions.dragOver}
+              onDrop={event => actions.drop(event, crumb.path)}
             >
               {index > 0 && <span className={css.fileGridCrumbSep}>/</span>}
               {crumb.label}
@@ -229,7 +216,7 @@ export function FileGrid(props: {
       {loading && <div className={css.gitPlaceholder}>{t('loading')}</div>}
       {!loading && error !== null && <div className={css.gitError}>{error}</div>}
       {!loading && error === null && (
-        <div className={css.fileGridScroll}>
+        <div className={css.fileGridScroll} onClick={event => { if (event.target === event.currentTarget) actions.clearSelection() }}>
           <div
             className={css.fileGrid}
             role="list"
@@ -240,6 +227,10 @@ export function FileGrid(props: {
               type="button"
               className={clsx(css.fileGridItem, css.fileGridBack, atRoot && css.fileGridBackDisabled)}
               disabled={atRoot}
+              data-cursorlike-drop-dir={atRoot ? undefined : parentOf(currentDir)}
+              data-cursorlike-parent=""
+              onDragOver={atRoot ? undefined : actions.dragOver}
+              onDrop={atRoot ? undefined : event => actions.drop(event, parentOf(currentDir))}
               title={t('parent')}
               onClick={goBack}
             >
@@ -248,7 +239,7 @@ export function FileGrid(props: {
               </span>
               <span className={css.fileGridLabel}>{t('parent')}</span>
             </button>
-            {entries.map((entry) => {
+            {sorted.map((entry) => {
               const thumb = thumbFor(entry)
               return (
               <button
@@ -256,20 +247,11 @@ export function FileGrid(props: {
                 type="button"
                 role="listitem"
                 draggable={!entry.broken}
-                className={clsx(css.fileGridItem, entry.hidden && css.explorerHidden)}
+                className={clsx(css.fileGridItem, entry.hidden && css.explorerHidden, actions.selected.has(entry.path) && css.explorerRowSelected)}
                 title={entry.path}
                 data-cursorlike-path={entry.path}
                 data-cursorlike-directory={entry.isDir ? 'true' : 'false'}
-                onClick={() => openEntry(entry)}
-                onDoubleClick={() => { if (!entry.isDir) onOpenFile(entry.path) }}
-                onContextMenu={(event) => {
-                  event.preventDefault()
-                  event.stopPropagation()
-                  setMenu({ entry, x: event.clientX, y: event.clientY })
-                }}
-                onDragStart={(event: DragEvent<HTMLButtonElement>) => {
-                  writeReferenceDrag(event.dataTransfer, scope, [{ path: entry.path, directory: entry.isDir }])
-                }}
+                {...actions.rowProps(entry)}
               >
                 <span className={css.fileGridIcon} style={{ width: iconSize + 4, height: iconSize + 4 }}>
                   {iconFor(entry)}
@@ -293,27 +275,7 @@ export function FileGrid(props: {
         </div>
       )}
 
-      {menu !== null && createPortal(
-        <div
-          ref={menuRef}
-          className={css.fileGridMenu}
-          style={{ left: menu.x, top: menu.y }}
-          onMouseDown={(event) => event.stopPropagation()}
-        >
-          <button type="button" onClick={() => { openEntry(menu.entry); setMenu(null) }}>
-            {t('openEditor')}
-          </button>
-          {!menu.entry.isDir && onOpenFileNewTab !== undefined && (
-            <button type="button" onClick={() => { onOpenFileNewTab(menu.entry.path); setMenu(null) }}>{t('openFileNewTab')}</button>
-          )}
-          {!menu.entry.isDir && onOpenFileSide !== undefined && (
-            <button type="button" onClick={() => { onOpenFileSide(menu.entry.path); setMenu(null) }}>{t('openFileSide')}</button>
-          )}
-          <button type="button" onClick={() => { onReferenceFile(menu.entry.path, menu.entry.isDir); setMenu(null) }}>{t('referenceFile')}</button>
-          <button type="button" onClick={() => copyPath(menu.entry.path)}>{t('copyPaths')}</button>
-        </div>,
-        document.body,
-      )}
+      {actions.controls}
     </div>
   )
 }

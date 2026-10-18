@@ -3,6 +3,7 @@ import type { OpenInApp } from './open-in-app.ts';
 import type { OpenWithTarget } from './open-with.ts';
 import type { BetterSidebarService } from './service.ts';
 import { type UploadItem } from './upload.ts';
+import { type FileTransferMode } from './file-clipboard.ts';
 /** Root label: the last path segment (mirror of the host rootLabel). */
 export declare function baseName(path: string): string;
 /** A direct child path of one tree level (row paths may use either separator;
@@ -64,6 +65,8 @@ export declare function FileTree(props: {
     onPathDeleted?: (path: string, isDir: boolean) => void;
     /** Bump to wipe the level cache and reload the visible set. */
     refreshTick: number;
+    onTransferRequest?: (dir: string, paths: string[], mode: FileTransferMode) => void;
+    onBeforeRemove?: (paths: string[]) => boolean;
     /** Upload into `dir` (absolute, inside the workspace); runs in the caller. */
     onUploadRequest: (dir: string, items: UploadItem[]) => void;
     /** True while an upload is in flight (drops are ignored). */

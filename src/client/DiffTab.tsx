@@ -18,11 +18,13 @@ import { DiffFiles } from './diff/DiffFiles.tsx'
 import { useGitDiffTarget } from './diff/use-git-diff.ts'
 import { t } from './locales.ts'
 import css from './sidebar.module.css'
+import type { Context } from '../context-types.ts'
+import { WorktreeReview } from './diff/WorktreeReview.tsx'
 
-export function DiffTab(props: { sessionId: string; cwd: string | undefined; diff: SidebarDiffRef }) {
+export function DiffTab(props: { ctx?: Context; sessionId: string; cwd: string | undefined; diff: SidebarDiffRef }) {
   const { sessionId, cwd, diff } = props
   const scope = useMemo<SessionScope>(() => ({ sessionId, cwd }), [sessionId, cwd])
-  const { loading, error, diffText, untracked, refresh, resolveFold } = useGitDiffTarget(diff, scope)
+  const { loading, error, diffText, untracked, refresh, resolveFold, effectiveStaged } = useGitDiffTarget(diff, scope)
 
   return (
     <div className={css.gitDiffTab}>
@@ -44,7 +46,9 @@ export function DiffTab(props: { sessionId: string; cwd: string | undefined; dif
       {!loading && error !== null && <div className={css.gitError}>{t('diffLoadError')}: {error}</div>}
       {!loading && error === null && diffText !== null && (
         <>
-          {untracked !== undefined
+          {diff.kind === 'worktree' && effectiveStaged === false && props.ctx !== undefined
+            ? <WorktreeReview key={diffText} ctx={props.ctx} scope={scope} diff={diff} auto fallback={<DiffFiles diff={diffText} resolveFold={resolveFold} />} />
+            : untracked !== undefined
             ? <DiffFiles diff="" untrackedPath={diff.kind === 'worktree' ? diff.path : ''} untrackedContent={untracked} />
             : <DiffFiles diff={diffText} resolveFold={resolveFold} />}
           {diffText === '' && untracked === undefined && (

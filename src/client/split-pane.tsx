@@ -14,7 +14,7 @@ import type { ReactNode } from 'react'
 import clsx from 'clsx'
 import type { SidebarState, SidebarTab, SplitNode } from './state.ts'
 import type { DropZone } from './state.ts'
-import { TabBar, type NewTabOption, parseDrag, type TabDragPayload } from './TabBar.tsx'
+import { TAB_DRAG_TYPE, TabBar, type NewTabOption, parseDrag, type TabDragPayload } from './TabBar.tsx'
 import { createFrameBatcher } from './frame-batcher.ts'
 import css from './sidebar.module.css'
 
@@ -178,6 +178,7 @@ function LeafView(props: {
       data-dsh-pane={leaf.id}
       onPointerDown={() => { actions.focusPane(leaf.id) }}
       onDragOver={(event) => {
+        if (!event.dataTransfer.types.includes(TAB_DRAG_TYPE)) return
         event.preventDefault()
         const zone = zoneAt(event, event.currentTarget)
         setDropZone(zone)
@@ -189,10 +190,11 @@ function LeafView(props: {
         }
       }}
       onDrop={(event) => {
+        if (!event.dataTransfer.types.includes(TAB_DRAG_TYPE)) return
         event.preventDefault()
         const zone = dropZone ?? zoneAt(event, event.currentTarget)
         setDropZone(null)
-        const payload = parseDrag(event.dataTransfer.getData('application/x-dsh-tab'))
+        const payload = parseDrag(event.dataTransfer.getData(TAB_DRAG_TYPE))
         if (payload !== null) actions.moveTabToEdge(payload, leaf.id, zone)
       }}
     >

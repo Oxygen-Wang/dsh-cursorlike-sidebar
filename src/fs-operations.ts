@@ -23,8 +23,8 @@
 import { randomUUID } from 'node:crypto'
 import { once } from 'node:events'
 import { createWriteStream } from 'node:fs'
-import { access, lstat, mkdir, rename, rm, stat, unlink, writeFile } from 'node:fs/promises'
-import { basename, dirname, join } from 'node:path'
+import { access, cp, lstat, mkdir, realpath, rename, rm, stat, unlink, writeFile } from 'node:fs/promises'
+import { basename, dirname, extname, isAbsolute, join, relative } from 'node:path'
 import { invalidateDirectoryCache, requireAbsolute } from './fs-tree.ts'
 import { ensureWorkspaceWritePath, resolveTarget } from './path-security.ts'
 import { encodeText, fileFormatOf, restoreEol } from './text-encoding.ts'
@@ -318,6 +318,59 @@ export async function renameWorkspaceEntry(input: WorkspaceRenameInput): Promise
   }
   invalidateDirectoryCache(dirname(safeDestination))
   return { path: safeDestination }
+}
+
+/** Serialize transfers so concurrent requests cannot claim the same name. */
+let transferQueue: Promise<unknown> = Promise.resolve()
+
+/** Move or recursively copy an entry into an existing directory, preserving links. */
+export function transferWorkspaceEntry(input: {
+  cwd: string
+  path: string
+  dir: string
+  mode: 'copy' | 'move'
+}): Promise<{ path: string }> {
+  const operation = transferQueue.then(async () => {
+    const { cwd, mode } = input
+    if (mode !== 'copy' && mode !== 'move') throw new SidebarError('bad-request', 'mode must be copy or move', 400)
+    const source = resolveTarget(cwd, input.path)
+    const directory = resolveTarget(cwd, input.dir)
+    if (await isWorkspaceRoot(source, requireAbsolute(cwd))) throw new SidebarError('fs-error', 'cannot transfer the workspace root', 400)
+    const info = await lstat(source)
+    if (!(await stat(directory)).isDirectory()) throw new SidebarError('fs-error', 'destination must be a directory', 400)
+    // Check actual locations too: a symlink to a descendant must not allow a
+    // recursive copy into the source. A symlink ROW itself is never followed.
+    if (info.isDirectory()) {
+      const tail = relative(await realpath(source), await realpath(directory))
+      if (tail === '' || (!tail.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) && tail !== '..' && !isAbsolute(tail))) {
+        throw new SidebarError('fs-error', 'cannot transfer a directory into itself or its descendants', 400)
+      }
+    }
+    const name = basename(source)
+    let destination = await ensureWorkspaceWritePath(cwd, join(directory, name))
+    if (mode === 'move' && sameSpelling(source, destination)) return { path: source }
+    const exists = async (path: string): Promise<boolean> => {
+      try { await lstat(path); return true } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+        throw error
+      }
+    }
+    if (mode === 'copy') {
+      const extension = info.isDirectory() ? '' : extname(name)
+      const stem = extension === '' ? name : name.slice(0, -extension.length)
+      let suffix = 1
+      while (await exists(destination)) destination = join(directory, `${stem} (${suffix++})${extension}`)
+      await cp(source, destination, { recursive: true, force: false, errorOnExist: true, dereference: false, verbatimSymlinks: true })
+    } else {
+      if (await exists(destination)) throw new SidebarError('fs-error', `"${name}" already exists`, 409)
+      await rename(source, destination)
+    }
+    invalidateDirectoryCache(directory)
+    invalidateDirectoryCache(dirname(source))
+    return { path: destination }
+  })
+  transferQueue = operation.catch(() => {})
+  return operation
 }
 
 /** Inputs of one new directory row. */

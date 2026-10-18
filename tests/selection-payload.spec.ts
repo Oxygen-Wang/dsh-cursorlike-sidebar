@@ -94,6 +94,10 @@ describe('linesOfSelection', () => {
 })
 
 describe('linesOfSelection in a rendered Markdown preview', () => {
+  it('maps consecutive checked tasks without copying checkbox syntax', () => {
+    expect(linesOfSelection('# 已完成\n- [x] 文件**撤销**\n- [ ] 网格操作\n- [X] 拖动操作', '文件撤销\n网格操作\n拖动操作'))
+      .toEqual({ start: 2, end: 4 })
+  })
   const markdown = [
     '# 需求',
     '- **修改后的差异块后面增加 **保留 / 撤销** 操作。**',

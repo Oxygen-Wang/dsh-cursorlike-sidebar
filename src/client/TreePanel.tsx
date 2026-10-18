@@ -19,7 +19,7 @@
  * drop over the file window uploads here and never reaches DSH's chat
  * intake.
  */
-import { useEffect, useMemo, useRef, useState, type InputHTMLAttributes } from 'react'
+import { useEffect, useMemo, useRef, useState, type DragEvent, type InputHTMLAttributes } from 'react'
 import clsx from 'clsx'
 import { IconChevronsUpDownOutlineRegular, IconFolderOpenRegular, IconRefreshOutlineRegular, Menu } from '@deepseek-ai/dsh-client-ui-primitives'
 import { api } from './api.ts'
@@ -35,7 +35,11 @@ import type { OpenWithTarget } from './open-with.ts'
 import { t } from './locales.ts'
 import { isWithinWorkspace, relativeTo, resolveSidebarPath } from './paths.ts'
 import { readCursorlikeDrag } from './cursorlike-interactions.ts'
+import { useFileHistory } from './use-file-history.tsx'
+import { hasUnsavedPath } from './editor-dirty.ts'
+import { consumeFileClipboard, readFileClipboard, topLevelPaths, writeFileClipboard, type FileTransferMode } from './file-clipboard.ts'
 import { IGNORE_FILE, appendIgnorePatterns, parseIgnoreFile } from './ignore-file.ts'
+import { ensureIgnoreFile } from './ensure-ignore-file.ts'
 import { IconButton } from './ui/index.ts'
 import { UploadOverlay } from './UploadOverlay.tsx'
 import {
@@ -47,7 +51,7 @@ import css from './sidebar.module.css'
 /** Files view preference (tree, desktop icon grid, or Miller columns). */
 type FilesView = 'tree' | 'grid' | 'columns'
 const FILES_VIEW_KEY = 'dsh-cursorlike-sidebar:files-view'
-const FILES_VIEW_MIGRATION_KEY = 'dsh-cursorlike-sidebar:files-view-v3'
+const FILES_SORT_KEY = 'dsh-cursorlike-sidebar:files-sort'
 const FILES_ICON_KEY = 'dsh-cursorlike-sidebar:files-icon-size'
 const FILES_ICON_DEFAULT = 48
 const FILES_ICON_MIN = 24
@@ -61,16 +65,18 @@ const FILES_ICON_MAX = 160
 function readFilesView(): FilesView {
   try {
     const value = localStorage.getItem(FILES_VIEW_KEY)
-    // One-time migration to the new desktop-grid default. Columns remains a
-    // deliberate choice; a tree chosen later (after the marker exists) is kept.
-    if (localStorage.getItem(FILES_VIEW_MIGRATION_KEY) === null) {
-      localStorage.setItem(FILES_VIEW_MIGRATION_KEY, '1')
-      return value === 'columns' ? 'columns' : 'grid'
-    }
     return value === 'tree' || value === 'columns' ? value : 'grid'
   } catch {
     return 'grid'
   }
+}
+
+function readFilesSort(): FileTreeSort {
+  try {
+    const value = JSON.parse(localStorage.getItem(FILES_SORT_KEY) ?? 'null') as FileTreeSort | null
+    if (value !== null && (value.key === 'name' || value.key === 'type') && typeof value.dirsFirst === 'boolean') return value
+  } catch { /* malformed or unavailable storage */ }
+  return DEFAULT_FILE_TREE_SORT
 }
 
 /** Read the persisted grid icon size, clamped for the wheel zoom range. */
@@ -154,7 +160,10 @@ export function TreePanel(props: {
    * default — name order, folders first — which is the order the host already
    * returns, so the tree looks exactly as it did before the control existed.
    */
-  const [sort, setSort] = useState<FileTreeSort>(DEFAULT_FILE_TREE_SORT)
+  const [sort, setSort] = useState<FileTreeSort>(readFilesSort)
+  useEffect(() => {
+    try { localStorage.setItem(FILES_SORT_KEY, JSON.stringify(sort)) } catch { /* keep the in-memory choice */ }
+  }, [sort])
   const [sortOpen, setSortOpen] = useState(false)
   /** Desktop-icon grid vs the original tree; persisted for the next open. */
   const [view, setView] = useState<FilesView>(readFilesView)
@@ -162,6 +171,59 @@ export function TreePanel(props: {
   const [iconSize, setIconSize] = useState(readFilesIconSize)
   /** The `.ignore` drop target's hover state. */
   const [ignoreDropActive, setIgnoreDropActive] = useState(false)
+  const [transferError, setTransferError] = useState<string | null>(null)
+  const [transferring, setTransferring] = useState(false)
+  const transferLock = useRef(false)
+  const transferGeneration = useRef(0)
+  const scopeKey = JSON.stringify([sessionId, cwd])
+  const liveScope = useRef(scopeKey)
+  liveScope.current = scopeKey
+  useEffect(() => {
+    transferGeneration.current += 1
+    setTransferError(null); setTransferring(false); transferLock.current = false
+    return () => { transferGeneration.current += 1 }
+  }, [scopeKey])
+  const transferFiles = (dir: string, paths: string[], mode: FileTransferMode): void => {
+    if (cwd === undefined || transferLock.current || busy) return
+    transferLock.current = true
+    setTransferring(true)
+    setTransferError(null)
+    const key = scopeKey
+    const generation = transferGeneration.current
+    const active = (): boolean => liveScope.current === key && transferGeneration.current === generation
+    const scope = { sessionId, cwd }
+    const sources = topLevelPaths(paths)
+    const group = sources.length > 1 ? crypto.randomUUID() : undefined
+    void (async () => {
+      for (const path of sources) {
+        if (!active()) return
+        const result = await (group === undefined ? api.fsTransfer(scope, path, dir, mode) : api.fsTransfer(scope, path, dir, mode, group))
+        if (!active()) return
+        if (mode === 'move') {
+          consumeFileClipboard(scope, path)
+          onPathRenamed?.(path, result.path)
+        }
+      }
+    })().catch((failure: unknown) => {
+      if (active()) setTransferError(failure instanceof Error ? failure.message : String(failure))
+    }).finally(() => {
+      if (!active()) return
+      transferLock.current = false
+      setTransferring(false)
+      setRefreshTick(tick => tick + 1)
+    })
+  }
+  /** The directory under a pointer, with the view's current directory as fallback. */
+  const dropDir = (target: HTMLElement): string | undefined => {
+    const explicit = target.closest<HTMLElement>('[data-cursorlike-drop-dir]')
+    const row = target.closest<HTMLElement>('[data-cursorlike-path]')
+    if (explicit !== null && (row === null || row.contains(explicit))) return explicit.dataset.cursorlikeDropDir
+    if (row?.dataset.cursorlikeDirectory === 'true') return row.dataset.cursorlikePath
+    const path = row?.dataset.cursorlikePath
+    if (path !== undefined) return path.slice(0, Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))) || cwd
+    return target.closest<HTMLElement>('[data-cursorlike-drop-dir]')?.dataset.cursorlikeDropDir ?? cwd
+  }
+  const internalDrag = (event: DragEvent<HTMLElement>): boolean => event.dataTransfer.types.includes('application/x-cursorlike-context')
 
   // The tree caches loaded directories per refresh tick, so content changed
   // outside DSH (another editor, a sync tool) stays stale until the manual
@@ -227,7 +289,7 @@ export function TreePanel(props: {
 
   /** Start one upload session into `dir` (absolute, inside the workspace). */
   const startUpload = (dir: string, items: UploadItem[]): void => {
-    if (items.length === 0 || cwd === undefined || upload !== null) return
+    if (items.length === 0 || cwd === undefined || busy) return
     cancelledRef.current = false
     const controller = new AbortController()
     setUploadFailed(false)
@@ -309,7 +371,22 @@ export function TreePanel(props: {
     }
   }, [sessionId, cwd, needle, excludeKey])
 
-  const busy = upload !== null
+  const canRemovePaths = (paths: string[]): boolean => {
+    if (paths.some(path => hasUnsavedPath(sessionId, path, cwd))) {
+      setTransferError(t('fileHistoryUnsaved'))
+      return false
+    }
+    setTransferError(null)
+    return true
+  }
+  const history = useFileHistory({ sessionId, cwd }, effect => {
+    if (effect.type === 'move') onPathRenamed?.(effect.from, effect.path)
+    else if (effect.type === 'remove') onPathDeleted?.(effect.path, effect.isDir)
+  }, upload !== null || transferring, (step, direction) => {
+    const removes = direction === 'undo' ? ['copy', 'file', 'folder'].includes(step.kind) : step.kind === 'delete'
+    return !removes || !step.paths.some(path => hasUnsavedPath(sessionId, path, cwd))
+  })
+  const busy = upload !== null || transferring || history.busy
   /** Directory hits (the host reports them separately): a click navigates the
    *  tree for those rows instead of opening them as files. */
   const dirHits = useMemo(() => new Set(results?.dirs), [results])
@@ -379,7 +456,14 @@ export function TreePanel(props: {
         mtime = current.mtimeMs
       }
     } catch {
-      /* missing .ignore: create it below */
+      try {
+        const current = await ensureIgnoreFile({ sessionId, cwd })
+        content = current.content
+        mtime = current.mtimeMs
+      } catch (error) {
+        setTransferError(error instanceof Error ? error.message : String(error))
+        return
+      }
     }
     const lines = content.split(/\r?\n/).filter(line => line.trim() !== '')
     const additions = patterns.filter(pattern => !lines.includes(pattern))
@@ -389,12 +473,59 @@ export function TreePanel(props: {
       await api.fsWrite({ sessionId, cwd }, ignorePath, next, mtime)
       setRefreshTick(tick => tick + 1)
     } catch (error) {
-      console.warn('[dsh-cursorlike-sidebar] .ignore write failed:', error)
+      setTransferError(error instanceof Error ? error.message : String(error))
     }
   }
 
   return (
-    <div className={clsx(css.editorTreePanel, full === true && css.editorTreePanelFull)}>
+    <div className={clsx(css.editorTreePanel, full === true && css.editorTreePanelFull)}
+      onKeyDownCapture={event => {
+        if (event.nativeEvent.isComposing || event.altKey || (event.target as HTMLElement).closest('input,textarea,[contenteditable="true"],[role="dialog"],.cm-editor')) return
+        const element = event.target as HTMLElement
+        if (event.ctrlKey || event.metaKey) {
+          const key = event.key.toLowerCase()
+          if (key === 'z' || (!event.shiftKey && key === 'y')) {
+            event.preventDefault(); event.stopPropagation()
+            if (!busy) { if (event.shiftKey || key === 'y') history.redo(); else history.undo() }
+            return
+          }
+        }
+        if (event.shiftKey) return
+        if (event.key === 'F5') {
+          event.preventDefault(); event.stopPropagation(); setRefreshTick(tick => tick + 1); return
+        }
+        if (!(event.ctrlKey || event.metaKey)) return
+        const key = event.key.toLowerCase()
+        if (!['c', 'x', 'v'].includes(key) || busy) return
+        if (key === 'v') {
+          const value = readFileClipboard({ sessionId, cwd })
+          const dir = dropDir(element)
+          if (value === undefined || value.paths.length === 0 || dir === undefined) return
+          event.preventDefault(); event.stopPropagation()
+          transferFiles(dir, value.paths, value.mode)
+        } else {
+          const pane = element.closest('[data-cursorlike-drop], [data-cursorlike-file-grid]')
+          const selected = [...(pane?.querySelectorAll<HTMLElement>('[data-dsh-selected="true"][data-cursorlike-path]') ?? [])].map(row => row.dataset.cursorlikePath!)
+          const path = element.closest<HTMLElement>('[data-cursorlike-path]')?.dataset.cursorlikePath
+          const paths = selected.length > 0 ? selected : path === undefined ? [] : [path]
+          if (paths.length === 0) return
+          event.preventDefault(); event.stopPropagation()
+          writeFileClipboard({ sessionId, cwd }, paths, key === 'x' ? 'move' : 'copy')
+        }
+      }}
+      onDragOverCapture={event => {
+        if (!internalDrag(event) || (event.target as HTMLElement).closest('[data-cursorlike-ignore-drop]')) return
+        event.preventDefault(); event.stopPropagation()
+        event.dataTransfer.dropEffect = busy ? 'none' : event.ctrlKey || event.metaKey ? 'copy' : 'move'
+      }}
+      onDropCapture={event => {
+        if (!internalDrag(event) || (event.target as HTMLElement).closest('[data-cursorlike-ignore-drop]')) return
+        event.preventDefault(); event.stopPropagation()
+        const value = readCursorlikeDrag(event.dataTransfer)
+        const dir = dropDir(event.target as HTMLElement)
+        if (value === undefined || value.sessionId !== sessionId || value.cwd !== cwd || value.lineStart !== undefined || dir === undefined) return
+        transferFiles(dir, value.paths.map(item => item.path), event.ctrlKey || event.metaKey ? 'copy' : 'move')
+      }}>
       <div className={css.editorTreeSearch}>
         <input
           className={css.editorSearchInput}
@@ -420,6 +551,7 @@ export function TreePanel(props: {
           }}
         />
         <div
+          data-cursorlike-ignore-drop=""
           className={clsx(css.ignoreDrop, ignoreDropActive && css.ignoreDropActive)}
           onDragEnter={(event) => {
             if (event.dataTransfer?.types.includes('application/x-cursorlike-context') === true) {
@@ -444,7 +576,18 @@ export function TreePanel(props: {
             label=".ignore"
             title=".ignore"
             icon={<IconEyeOffOutline16 size={14} />}
-            onClick={() => { if (cwd !== undefined) onOpenFile(resolveSidebarPath(cwd, IGNORE_FILE)) }}
+            onClick={() => {
+              if (cwd === undefined || busy) return
+              const armed = liveScope.current
+              void ensureIgnoreFile({ sessionId, cwd }).then(() => {
+                if (liveScope.current !== armed) return
+                setTransferError(null)
+                setRefreshTick(tick => tick + 1)
+                onOpenFile(resolveSidebarPath(cwd, IGNORE_FILE))
+              }).catch((error: unknown) => {
+                if (liveScope.current === armed) setTransferError(error instanceof Error ? error.message : String(error))
+              })
+            }}
           />
         </div>
         {/* Row order: the two keys are one choice (check mark), the
@@ -516,9 +659,13 @@ export function TreePanel(props: {
           }}
         />
       </div>
+      <div className={css.fileHistoryToolbar} role="toolbar" aria-label={t('fileHistory')}>{history.toolbar}</div>
       {uploadStatus !== '' && (
         <div className={clsx(css.editorSearchHint, uploadFailed && css.editorError)} title={uploadStatus}>{uploadStatus}</div>
       )}
+      {transferError !== null && <div className={clsx(css.editorSearchHint, css.editorError)} role="alert">{transferError}</div>}
+      {transferring && <div className={css.editorSearchHint} role="status">{t('loading')}</div>}
+      {history.feedback}
       {/* Search results: parked (not unmounted) while the query is empty. Its
           contents render only for a live query — a parked panel must not put
           state text (the loading line) into the panel's DOM. */}
@@ -563,11 +710,20 @@ export function TreePanel(props: {
       {view !== 'tree' && !searching ? (
         view === 'grid' ? (
           <FileGrid
+            key={scopeKey}
             sessionId={sessionId}
             cwd={cwd}
             exclude={effectiveExclude}
             visible={visible !== false}
             service={service}
+            refreshTick={refreshTick}
+            sort={sort}
+            onPathRenamed={onPathRenamed}
+            onPathDeleted={onPathDeleted}
+            onUploadRequest={startUpload}
+            busy={busy}
+            onBeforeRemove={canRemovePaths}
+            onTransferRequest={transferFiles}
             iconSize={iconSize}
             onIconSizeChange={changeIconSize}
             onOpenFile={onOpenFile}
@@ -577,11 +733,20 @@ export function TreePanel(props: {
           />
         ) : (
           <FileColumns
+            key={scopeKey}
             sessionId={sessionId}
             cwd={cwd}
             exclude={effectiveExclude}
             visible={visible !== false}
             service={service}
+            refreshTick={refreshTick}
+            sort={sort}
+            onPathRenamed={onPathRenamed}
+            onPathDeleted={onPathDeleted}
+            onUploadRequest={startUpload}
+            busy={busy}
+            onBeforeRemove={canRemovePaths}
+            onTransferRequest={transferFiles}
             onOpenFile={onOpenFile}
             onOpenFileNewTab={onOpenFileNewTab}
             onOpenFileSide={onOpenFileSide}
@@ -612,6 +777,8 @@ export function TreePanel(props: {
         refreshTick={refreshTick}
         onUploadRequest={startUpload}
         busy={busy}
+        onBeforeRemove={canRemovePaths}
+        onTransferRequest={transferFiles}
         hidden={searching}
         visible={visible !== false}
         sort={sort}

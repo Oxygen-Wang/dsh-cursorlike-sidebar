@@ -17,11 +17,13 @@ export declare function headerOf(path: string, cwd: string | undefined, lines?: 
  */
 export declare function buildSelectionInsert(path: string, cwd: string | undefined, lines: SelectionLines | undefined, selected: string): string;
 /**
- * Reverse-map a rendered-DOM selection back to source line numbers. The
- * preview selection is plain text (block boundaries come out as `\n`), so
- * this is a best-effort substring search: a single trailing newline is
- * stripped first (DOM block selections tend to carry one), and only an
- * EXACTLY-ONE occurrence yields lines — an ambiguous or missing match
+ * Map a rendered-DOM selection back to source line numbers.
+ *
+ * The exact source search runs first. A Markdown preview strips formatting
+ * (emphasis, bullets, links, inline code, blockquotes), so when that misses we
+ * search a whitespace-normalized visible projection of the source, then fall
+ * back to matching the selected lines against consecutive source lines. Only
+ * a single unambiguous match yields lines — an ambiguous or missing match
  * returns null (the header then carries the path without line numbers).
  */
 export declare function linesOfSelection(source: string, selected: string): SelectionLines | null;

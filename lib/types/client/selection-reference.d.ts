@@ -20,6 +20,8 @@ export interface SelectionReference {
     path: string;
     /** The selected source lines; absent when the source line is unknown. */
     lines?: SelectionLines;
+    /** The selected text, used as the fallback body when lines are unknown. */
+    text?: string;
 }
 /**
  * The plain-text suffix appended after the native file chip.
@@ -27,6 +29,14 @@ export interface SelectionReference {
  * @returns `' line 12-18'`, `' line 12'`, or `''`.
  */
 export declare function lineSuffix(lines?: SelectionLines): string;
+/**
+ * What follows the native file chip: the line suffix when the source span is
+ * known, otherwise the selected text as a body (the "no line number, add the
+ * content" fallback).
+ * @param reference - the selected file/line/text.
+ * @returns `' line 12-18'`, `'\\n\\ntext'`, or `''`.
+ */
+export declare function selectionInsertBody(reference: SelectionReference): string;
 /**
  * A text fallback for a reference whose workspace root is unavailable: the
  * absolute path followed by the same line suffix. Used only when the native

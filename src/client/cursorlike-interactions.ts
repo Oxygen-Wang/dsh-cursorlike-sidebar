@@ -23,7 +23,7 @@ export function writeReferenceDrag(transfer: DataTransfer, scope: SessionScope, 
   const value: CursorlikeDrag = { version: 1, sessionId: scope.sessionId, cwd: scope.cwd, paths }
   transfer.setData(CURSORLIKE_DRAG, JSON.stringify(value))
   transfer.setData('text/plain', paths.map(item => mentionFor(scope.cwd ? relativeTo(scope.cwd, item.path) : item.path, item.directory ? 'folder' : 'file')?.mention || item.path).join(' '))
-  transfer.effectAllowed = 'copy'
+  transfer.effectAllowed = 'copyMove'
 }
 
 /**

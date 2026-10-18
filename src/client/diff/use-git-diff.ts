@@ -20,6 +20,7 @@ import { displayPath, foldRowsFromContents, type DiffFile, type DiffRow, type Fo
 
 /** The loaded state of one git diff target. */
 export interface GitDiffTarget {
+  effectiveStaged: boolean | null
   /** A fetch is in flight (true only while nothing has loaded yet, or after a refresh drops the data). */
   loading: boolean
   error: string | null
@@ -76,6 +77,7 @@ export function useGitDiffTarget(ref: SidebarDiffRef | null, scope: SessionScope
           return
         }
         let result = await api.gitDiff(paneScope, ref.path, ref.staged, ref.worktree)
+        if (!cancelled) setEffectiveStaged(ref.staged)
         if (result.diff === '') {
           // The requested side is empty — try the OTHER side once (the change
           // may have moved sides after the preview target was minted).
@@ -179,5 +181,5 @@ export function useGitDiffTarget(ref: SidebarDiffRef | null, scope: SessionScope
 
   const refresh = useCallback((): void => { setTick(value => value + 1) }, [])
 
-  return { loading, error, diffText, untracked, refresh, resolveFold }
+  return { loading, error, diffText, untracked, refresh, resolveFold, effectiveStaged }
 }

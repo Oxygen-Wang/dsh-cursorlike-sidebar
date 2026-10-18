@@ -44,6 +44,7 @@ export interface SelectionPopup<T> {
 }
 
 export interface SelectionPopupOptions<T> {
+  placement?: 'selection' | 'surface-bottom-right'
   sessionId?: string
   /** Commit the payload into the composer draft (button click / Ctrl+L). */
   onCommit(payload: T): void
@@ -90,6 +91,8 @@ export function useSelectionPopup<T>(options: SelectionPopupOptions<T>): Selecti
   const resolveRef = useRef(options.resolve)
   const labelRef = useRef(options.label)
   const onDragRef = useRef(options.onDrag)
+  const placementRef = useRef(options.placement)
+  placementRef.current = options.placement
   const sessionRef = useRef(options.sessionId)
   sessionRef.current = options.sessionId
   onCommitRef.current = options.onCommit
@@ -107,11 +110,18 @@ export function useSelectionPopup<T>(options: SelectionPopupOptions<T>): Selecti
   const observerRef = useRef<IntersectionObserver | null>(null)
 
   const show = (payload: T, left: number, top: number): void => {
+    if (placementRef.current === 'surface-bottom-right') {
+      const bounds = getSurfaceRef.current()?.getBoundingClientRect()
+      if (bounds !== undefined) {
+        left = Math.min(bounds.right, window.innerWidth) - 16
+        top = Math.min(bounds.bottom, window.innerHeight) - 16
+      }
+    }
     const next: SelectionPopup<T> = {
       payload,
       label: labelRef.current?.(payload) ?? String(payload),
-      left: Math.min(Math.max(left, 80), window.innerWidth - 80),
-      top,
+      left: placementRef.current === 'surface-bottom-right' ? Math.max(16, left) : Math.min(Math.max(left, 80), window.innerWidth - 80),
+      top: Math.max(48, top),
     }
     popupRef.current = next
     setPopup(next)

@@ -41,6 +41,8 @@ export declare function clearEditorDirty(tabId: string, sessionId?: string): voi
 export declare function isEditorDirty(tabId: string, sessionId?: string): boolean;
 /** How many tabs hold unsaved drafts across every session (the unload guard). */
 export declare function dirtyCount(): number;
+/** Guard explorer actions BEFORE moving a file whose draft only exists in memory. */
+export declare function hasUnsavedPath(sessionId: string, path: string, cwd?: string): boolean;
 /** Subscribe to dirty-set changes; returns the disposer. */
 export declare function subscribeEditorDirty(listener: () => void): () => void;
 /** The change counter (a stable `useSyncExternalStore` snapshot). */

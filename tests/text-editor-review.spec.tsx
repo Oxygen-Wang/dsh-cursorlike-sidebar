@@ -42,6 +42,15 @@ function click(element: HTMLElement): void {
   act(() => { element.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
 }
 
+/** Focus one bar control and press a chord: the review keys only act while
+ *  the editor or a review bar owns focus. */
+function key(element: HTMLElement, init: KeyboardEventInit): void {
+  element.focus()
+  act(() => {
+    document.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init }))
+  })
+}
+
 beforeEach(() => {
   localStorage.clear()
   fsWrite.mockReset()
@@ -54,11 +63,11 @@ afterEach(() => {
 })
 
 describe('TextEditor review bar', () => {
-  it('shows Keep/Revert after a host content change and Keep removes it', () => {
+  it('shows the per-hunk Keep/Revert bar after a host content change and Keep removes it', () => {
     const mounted = renderRoot(createElement(TextEditor, viewerProps()))
     try {
       mounted.rerender(createElement(TextEditor, viewerProps({ content: 'const a = 2\n', mtimeMs: 124 })))
-      expect(mounted.container.textContent).toContain('File changed')
+      expect(mounted.container.textContent).toContain('Change 1 of 1')
       expect(mounted.container.querySelector('[data-cursorlike-review-actions]')).not.toBeNull()
       expect(button(mounted.container, 'Keep')).toBeDefined()
       expect(button(mounted.container, 'Revert')).toBeDefined()
@@ -68,7 +77,7 @@ describe('TextEditor review bar', () => {
       expect(button(mounted.container, 'Undo')).toBeDefined()
 
       click(button(mounted.container, 'Undo')!)
-      expect(mounted.container.textContent).toContain('File changed')
+      expect(mounted.container.textContent).toContain('Change 1 of 1')
     } finally {
       mounted.unmount()
     }
@@ -89,7 +98,7 @@ describe('TextEditor review bar', () => {
       await act(async () => { await Promise.resolve() })
       expect(fsWrite).toHaveBeenCalledTimes(2)
       expect(fsWrite.mock.calls[1]![2]).toBe('const a = 2\n')
-      expect(mounted.container.textContent).toContain('File changed')
+      expect(mounted.container.textContent).toContain('Change 1 of 1')
     } finally {
       mounted.unmount()
     }
@@ -108,5 +117,101 @@ describe('TextEditor review bar', () => {
     click(button(second.container, 'Keep')!)
     expect(button(second.container, 'Keep')).toBeUndefined()
     second.unmount()
+  })
+
+  it('tints the kept line green and shows the removed line in a red block', async () => {
+    const mounted = renderRoot(createElement(TextEditor, viewerProps({ content: 'const a = 1\nconst b = 2\n' })))
+    try {
+      mounted.rerender(createElement(TextEditor, viewerProps({ content: 'const a = 9\nconst b = 2\n', mtimeMs: 124 })))
+      await act(async () => { await Promise.resolve() })
+      const removed = mounted.container.querySelector('[data-cursorlike-review-removed]')
+      expect(removed).not.toBeNull()
+      expect(removed!.textContent).toContain('const a = 1')
+      const tinted = [...mounted.container.querySelectorAll('.cm-line')]
+        .some(line => line.className.includes('editorReviewLineAdd'))
+      expect(tinted).toBe(true)
+    } finally {
+      mounted.unmount()
+    }
+  })
+
+  it('gives a pure-deletion hunk its own block and bar', async () => {
+    const mounted = renderRoot(createElement(TextEditor, viewerProps({ content: 'a\nb\nc\n' })))
+    try {
+      mounted.rerender(createElement(TextEditor, viewerProps({ content: 'a\nc\n', mtimeMs: 124 })))
+      await act(async () => { await Promise.resolve() })
+      expect(mounted.container.querySelector('[data-cursorlike-review-actions]')).not.toBeNull()
+      expect(mounted.container.querySelector('[data-cursorlike-review-removed]')?.textContent).toContain('b')
+      expect(mounted.container.textContent).toContain('Change 1 of 1')
+
+      click(button(mounted.container, 'Revert')!)
+      await act(async () => { await Promise.resolve() })
+      expect(fsWrite.mock.calls[0]![2]).toBe('a\nb\nc\n')
+      expect(mounted.container.querySelector('[data-cursorlike-review-removed]')).toBeNull()
+    } finally {
+      mounted.unmount()
+    }
+  })
+
+  it('splits a change into hunks and advances to the next one on Keep', () => {
+    const base = 'one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\n'
+    const target = 'ONE\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nNINE\n'
+    const mounted = renderRoot(createElement(TextEditor, viewerProps({ content: base })))
+    try {
+      mounted.rerender(createElement(TextEditor, viewerProps({ content: target, mtimeMs: 124 })))
+      expect(mounted.container.textContent).toContain('Change 1 of 2')
+      expect(mounted.container.textContent).toContain('2 left')
+
+      click(button(mounted.container, 'Keep')!)
+      expect(mounted.container.textContent).toContain('Change 2 of 2')
+      expect(mounted.container.textContent).toContain('1 left')
+      expect(fsWrite).not.toHaveBeenCalled()
+
+      click(button(mounted.container, 'Keep')!)
+      expect(button(mounted.container, 'Keep')).toBeUndefined()
+      expect(button(mounted.container, 'Undo')).toBeDefined()
+      expect(fsWrite).not.toHaveBeenCalled()
+    } finally {
+      mounted.unmount()
+    }
+  })
+
+  it('Ctrl+J rejects only the current hunk and advances', async () => {
+    const base = 'one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\n'
+    const target = 'ONE\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nNINE\n'
+    const mounted = renderRoot(createElement(TextEditor, viewerProps({ content: base })))
+    try {
+      mounted.rerender(createElement(TextEditor, viewerProps({ content: target, mtimeMs: 124 })))
+      key(button(mounted.container, 'Keep')!, { key: 'j', ctrlKey: true })
+      await act(async () => { await Promise.resolve() })
+      // Only the first hunk is reverted: the second one stays pending.
+      expect(fsWrite).toHaveBeenCalledTimes(1)
+      expect(fsWrite.mock.calls[0]![2]).toBe(target.replace('ONE', 'one'))
+      expect(mounted.container.textContent).toContain('Change 2 of 2')
+    } finally {
+      mounted.unmount()
+    }
+  })
+
+  it('Ctrl+Alt+K keeps every hunk; Ctrl+Alt+J reverts every hunk', async () => {
+    const base = 'one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\n'
+    const target = 'ONE\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nNINE\n'
+
+    const kept = renderRoot(createElement(TextEditor, viewerProps({ content: base })))
+    kept.rerender(createElement(TextEditor, viewerProps({ content: target, mtimeMs: 124 })))
+    key(button(kept.container, 'Keep')!, { key: 'k', ctrlKey: true, altKey: true })
+    await act(async () => { await Promise.resolve() })
+    expect(kept.container.querySelector('[data-cursorlike-review-actions]')).toBeNull()
+    expect(fsWrite).not.toHaveBeenCalled()
+    kept.unmount()
+
+    const reverted = renderRoot(createElement(TextEditor, viewerProps({ content: base })))
+    reverted.rerender(createElement(TextEditor, viewerProps({ content: target, mtimeMs: 124 })))
+    key(button(reverted.container, 'Keep')!, { key: 'j', ctrlKey: true, altKey: true })
+    await act(async () => { await Promise.resolve() })
+    expect(fsWrite).toHaveBeenCalledTimes(1)
+    expect(fsWrite.mock.calls[0]![2]).toBe(base)
+    expect(reverted.container.querySelector('[data-cursorlike-review-actions]')).toBeNull()
+    reverted.unmount()
   })
 })

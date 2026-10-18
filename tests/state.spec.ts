@@ -115,7 +115,7 @@ describe('sidebar state', () => {
     expect((after.bottomSplits as { tabs: SidebarTab[] }).tabs.map(tab => tab.id)).toContain('diff:w:u:src/a.ts')
   })
 
-  it('sanitize drops diff tabs (ephemeral, like VSCode diff editors)', () => {
+  it('restores valid diff tabs and their active selection after restart', () => {
     const valid = sanitizeState({
       nextBrowser: 1,
       activePane: 'pane:1',
@@ -132,11 +132,10 @@ describe('sidebar state', () => {
     })
     expect(valid?.bottomSplits.kind).toBe('leaf')
     const tabs = (valid?.bottomSplits as { tabs: SidebarTab[] }).tabs
-    expect(tabs.map(tab => tab.id)).toEqual(['explorer-tab'])
-    // The dropped diff tab was the active one: the leaf falls back to a null
-    // active instead of resetting the whole state.
-    expect((valid?.bottomSplits as { active: string | null }).active).toBeNull()
-    // A leaf of ONLY diff tabs survives as an empty pane (welcome cards).
+    expect(tabs.map(tab => tab.id)).toEqual(['explorer-tab', 'd1'])
+    expect(tabs[1]!.diff).toEqual({ kind: 'worktree', path: 'src/a.ts', staged: false })
+    expect((valid?.bottomSplits as { active: string | null }).active).toBe('d1')
+    // A malformed diff without coordinates is still discarded.
     const onlyDiff = sanitizeState({
       nextBrowser: 1,
       activePane: 'pane:1',

@@ -16,7 +16,7 @@ An independent DeepSeek Harness plugin, unaffiliated with Cursor or Anysphere.
 
 ![在 DSH 中选中 Markdown 文本，通过 Ctrl+L 添加带行号的会话引用 / Add selected Markdown text to chat with Ctrl+L](./docs/screenshots/chat-reference.png)
 
-*PPT 演示截图：左侧对话、右侧文件预览，选中文字即可引用。 / Demo from the supplied deck: chat beside a file preview, with selected text ready to reference.*
+*实际使用截图：左侧对话、右侧 Markdown 预览，选中文字后添加带行号的引用。 / In-app screenshot: chat beside a Markdown preview, with selected text referenced by line number.*
 
 <a id="features"></a>
 
@@ -32,13 +32,19 @@ An independent DeepSeek Harness plugin, unaffiliated with Cursor or Anysphere.
 
 Switch between a default icon grid, a hierarchical file tree, and Miller columns without leaving the workspace.
 
-<p align="center">
-  <img src="./docs/screenshots/file-view-1.png" width="32%" alt="桌面图标网格 / Icon grid" />
-  <img src="./docs/screenshots/file-view-3.png" width="32%" alt="树形列表 / File tree" />
-  <img src="./docs/screenshots/file-view-2.png" width="32%" alt="Miller 多列 / Miller columns" />
-</p>
+**桌面图标网格 / Icon grid**
 
-*从左到右：图标网格、树形列表、多列视图。 / Left to right: icon grid, file tree, and Miller columns.*
+![桌面图标网格 / Icon grid](./docs/screenshots/file-view-1.png)
+
+**树形列表 / File tree**
+
+![树形列表 / File tree](./docs/screenshots/file-view-3.png)
+
+**Miller 多列 / Miller columns**
+
+![Miller 多列 / Miller columns](./docs/screenshots/file-view-2.png)
+
+
 
 右键可打开文件、新建 Tab、侧边打开、添加引用或复制路径。支持文件多选、复制/剪切/粘贴、重命名、删除及文件操作历史。网格中按住 `Ctrl` 滚轮可调整图标大小（24–160px），64px 以上的图片图标显示缩略图；树形视图支持 10–32px 图标缩放。
 
@@ -71,12 +77,7 @@ node_modules
 *.log
 ```
 
-<details>
-<summary>查看 PPT 中的 .ignore 示例 · View the .ignore demo</summary>
-
-<img src="./docs/screenshots/ignore-files.png" width="600" alt="在编辑器中配置工作区根目录 .ignore / Root-level .ignore configuration" />
-
-</details>
+![在编辑器中配置工作区根目录 .ignore / Root-level .ignore configuration](./docs/screenshots/ignore-files.png)
 
 规则使用 gitignore 风格的 glob，当前仅读取根目录 `.ignore`，不支持 `!` 反向选择。手动编辑后点击刷新。隐藏仅影响文件展示，不会删除文件，也不会释放磁盘空间。
 
@@ -84,13 +85,27 @@ Rules use gitignore-style globs. Only the workspace root file is read, and `!` n
 
 ### 4. 逐块审查 Agent 修改 · Review agent edits by hunk
 
+![轮次改动审阅：默认单栏、按块同意/不同意、上下跳转与撤销 / Turn review in unified view with per-block accept/reject, change navigation, and undo](./docs/screenshots/diff-round-review-unified.png)
+
+*实际使用截图：原生「第 N 轮改动」页按块审阅。工具栏显示「第 N/M 处修改 · 还剩 K 处」，提供 ↑ / ↓ 跳转、同意 / 不同意、全部同意 / 全部不同意和撤销操作（做出决定后可用）。 / In-app screenshot: block review on the native turn page — position, previous/next, accept/reject, bulk actions, and undo (enabled after a decision).*
+
+原生「第 N 轮改动」页**默认单栏对比**，可手动切换左右分栏。连续改动行合并为一个更改块，每块只显示一组**同意 / 不同意**，也可**全部同意 / 全部不同意**。使用 **↑ / ↓** 跳到上一处或下一处，支持 Tab 聚焦按钮和恢复已保存的审阅决定。**Ctrl+K 同意、Ctrl+J 不同意、Ctrl+Z 撤销上一步**，快捷键直接显示在独立审阅工具栏中。待处理内容以红绿对比显示；同意后恢复普通背景、保留新内容并隐藏旧行，Ctrl+Z 后重新显示原始对比。撤销栈保存在本地，宿主重新挂载或刷新页面后仍可撤销上一步。窄面板中操作按钮移到块下方，避免挤压文字。
+
+The native turn review opens in unified view, with split view available on demand. Consecutive changed lines form one block. Accepting a block shows ordinary file content and hides the removed side; Ctrl+Z restores its original comparison. The toolbar shows the current position, previous/next navigation, individual and bulk decisions, and undo; Ctrl+K accepts, Ctrl+J rejects, and Ctrl+Z undoes the last decision. Undo history survives host remounts and page refreshes. Narrow panes place block actions below the text.
+
+手动切换左右分栏后，同一组块操作仍然可用：
+
+![左右分栏改动审阅 / Split-view turn review](./docs/screenshots/diff-round-review.png)
+
+*左右分栏对比（手动切换）。 / Side-by-side comparison (manual switch).*
+
 Agent 修改当前打开的文件后，编辑器直接显示内联差异：新增或改写行标绿，旧内容以红色删除块显示。按改动块（hunk）逐个**保留 / Keep** 或**撤销 / Revert**，处理后自动跳到下一处，操作条显示进度，也可一次处理全部修改。
 
 The editor highlights agent edits inline, with green additions and red deleted content. Keep or revert individual hunks, move automatically to the next change, or handle all changes at once.
 
-「更改」页支持对本轮 write/edit 操作逐行审查：每个改动行右侧有 ✓ 保留 / ✕ 撤销，当前行高亮；处理完一行自动跳到下一行，一个文件全部处理完后自动切到下一个改动文件。只有能重建完整旧内容、且磁盘仍匹配该操作结果时才启用写回；否则显示只读 diff 与原因。**撤销会立即写回磁盘。**
+「更改」页按连续更改块审查本轮 write/edit 操作：每块提供保留 / 撤销，处理后跳到下一处，一个文件处理完后切到下一个改动文件。只有能重建完整旧内容、且磁盘仍匹配该操作结果时才启用写回；否则显示只读 diff 与原因。**拒绝改动会立即写回磁盘。**
 
-The Changes tab reviews write/edit operations line by line: every changed line carries ✓ Keep / ✕ Revert, the active line is highlighted, and resolving a line jumps to the next one; finishing a file selects the next changed file. Review actions require a complete previous version and a matching current file. Otherwise, the diff stays read-only with an explanation. **Revert writes to disk immediately.**
+The Changes tab groups consecutive changed lines into one review block. Keep or reject a block, move to the next change, and advance to the next file when finished. Ctrl+K accepts, Ctrl+J rejects, and Ctrl+Z undoes the last decision. Review requires a complete previous version and a matching current file; otherwise it stays read-only with an explanation. **Rejecting a change writes to disk immediately.**
 
 未处理的编辑器审查状态按会话与文件保存在本地。重启后，文件仍匹配待审版本时恢复；处理完毕后清除。
 
@@ -119,8 +134,8 @@ Shortcuts act on the focused browser, editor, or review surface.
 - **`Ctrl+Z`**：撤销当前上下文中的操作；审查时撤销上一步决定 / Undo in the active context, including the last review decision.
 - **`Ctrl+Shift+Z` / `Ctrl+Y`**：文件浏览器中重做 / Redo file browser operations.
 - **`F5`**：刷新文件浏览器 / Refresh the file browser.
-- **`Ctrl+K` / `Ctrl+J`**：保留 / 撤销当前改动块（编辑器）或当前改动行（更改页）/ Keep or revert the active hunk (editor) or line (Changes tab).
-- **`Ctrl+Alt+K` / `Ctrl+Alt+J`**：全部保留 / 全部撤销 / Keep or revert all changes.
+- **`Ctrl+K` / `Ctrl+J`**：同意 / 不同意当前改动块（编辑器、「更改」页、官方轮次审阅）/ Accept or reject the active block (editor, Changes tab, turn review).
+- **`Ctrl+Alt+K` / `Ctrl+Alt+J`**：全部同意 / 全部不同意当前审阅 / Accept or reject every remaining block in the active review.
 - **`Ctrl+滚轮 / mouse wheel`**：调整文件图标大小 / Resize file icons.
 
 保留 DSH 原有 `Ctrl+B` 行为，无需额外桌面软件或 Python 运行时，不包含 PDF 依赖。

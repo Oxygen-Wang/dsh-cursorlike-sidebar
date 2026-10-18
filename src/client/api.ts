@@ -10,6 +10,7 @@
 import { encodeHtmlUrl } from '../html-route.ts'
 import { hostRouteUrl } from './host-route-url.ts'
 import { resolveSidebarPath } from './paths.ts'
+import type { FileHistoryResult, FileHistoryState } from '../file-history-types.ts'
 import type {
   SidechatLiveEvent,
   SidechatLogEvent,
@@ -426,6 +427,19 @@ function openExternal(payload: OpenExternalPayload): Promise<OpenExternalResult>
 }
 
 /** The sidebar API surface (session scope threaded through every call). */
+/** Mutation notices refresh undo controls in every Files window of the scope. */
+async function fileMutation(scope: SessionScope, method: string, extra: Record<string, unknown>): Promise<{ path: string }> {
+  const busy = (delta: number): void => {
+    if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('dsh-sidebar:file-busy', { detail: { ...scope, delta } }))
+  }
+  busy(1)
+  try {
+    const result = await call<{ path: string }>(method, scopePayload(scope, extra))
+    if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('dsh-sidebar:file-history', { detail: scope }))
+    return result
+  } finally { busy(-1) }
+}
+
 export const api = {
   sessionCwd: (scope: SessionScope, signal?: AbortSignal) =>
     call<{ sessionId: string; cwd: string; root: string; parent: string | null }>('session.cwd', scopePayload(scope, {}), signal),
@@ -474,21 +488,26 @@ export const api = {
    *  server refuses existing destinations, the workspace root, and — while
    *  the fence is armed — anything resolving outside the workspace). */
   fsRename: (scope: SessionScope, path: string, name: string) =>
-    call<{ path: string }>('fs.rename', scopePayload(scope, { path, name })),
-  /** Permanently delete one tree row (recursive for directories; a symlink
-   *  row unlinks the link only). The UI confirms before calling this. */
-  fsRemove: (scope: SessionScope, path: string) =>
-    call<{ path: string }>('fs.remove', scopePayload(scope, { path })),
+    fileMutation(scope, 'fs.rename', { path, name }),
+  /** Transfer one row into a directory; copies keep both names, moves refuse conflicts. */
+  fsTransfer: (scope: SessionScope, path: string, dir: string, mode: 'copy' | 'move', historyGroup?: string) =>
+    fileMutation(scope, 'fs.transfer', { path, dir, mode, ...(historyGroup === undefined ? {} : { historyGroup }) }),
+  /** Move an entry to recovery. Undo restores it without overwriting a new file. */
+  fsRemove: (scope: SessionScope, path: string, historyGroup?: string) =>
+    fileMutation(scope, 'fs.remove', { path, ...(historyGroup === undefined ? {} : { historyGroup }) }),
+  fsHistory: (scope: SessionScope, signal?: AbortSignal) => call<FileHistoryState>('fs.history', scopePayload(scope, {}), signal),
+  fsUndo: (scope: SessionScope, expectedId: string) => call<FileHistoryResult>('fs.undo', scopePayload(scope, { expectedId })),
+  fsRedo: (scope: SessionScope, expectedId: string) => call<FileHistoryResult>('fs.redo', scopePayload(scope, { expectedId })),
   /** Create one directory row inside `path` (single-segment name; the server
    *  refuses existing destinations, the workspace root, and — while the fence
    *  is armed — anything resolving outside the workspace). */
   fsMkdir: (scope: SessionScope, path: string, name: string) =>
-    call<{ path: string }>('fs.mkdir', scopePayload(scope, { path, name })),
+    fileMutation(scope, 'fs.mkdir', { path, name }),
   /** Create one EMPTY file row inside `path` (single-segment name; the server
    *  refuses existing destinations — without truncating them — plus the
    *  characters and Windows device names a file name may not use). */
   fsCreateFile: (scope: SessionScope, path: string, name: string) =>
-    call<{ path: string }>('fs.createFile', scopePayload(scope, { path, name })),
+    fileMutation(scope, 'fs.createFile', { path, name }),
   /** Upload one file's raw bytes into `dir` (keeps the folder tree via
    *  `relativePath`); the host streams it under the session workspace. */
   uploadFile: (scope: SessionScope, dir: string, relativePath: string, body: Blob, signal?: AbortSignal) =>

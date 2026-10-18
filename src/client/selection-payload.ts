@@ -90,6 +90,7 @@ function visibleSourceLine(line: string): string {
     .replace(/^\s{0,3}(?:>\s?)+/, '')
     .replace(/^\s{0,3}#{1,6}\s+/, '')
     .replace(/^\s*[-*+]\s+/, '')
+    .replace(/^\[[ xX]\]\s+/, '')
     .replace(/^\s*\d+[.)]\s+/, '')
     .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
     .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')

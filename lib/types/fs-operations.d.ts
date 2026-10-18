@@ -97,6 +97,15 @@ export interface WorkspaceRenameInput {
 export declare function renameWorkspaceEntry(input: WorkspaceRenameInput): Promise<{
     path: string;
 }>;
+/** Move or recursively copy an entry into an existing directory, preserving links. */
+export declare function transferWorkspaceEntry(input: {
+    cwd: string;
+    path: string;
+    dir: string;
+    mode: 'copy' | 'move';
+}): Promise<{
+    path: string;
+}>;
 /** Inputs of one new directory row. */
 export interface WorkspaceMkdirInput {
     /** The session workspace root (the base of session-relative targets). */

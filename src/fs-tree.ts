@@ -21,6 +21,7 @@ import type { Dir, Dirent } from 'node:fs'
 import { basename, dirname, isAbsolute, resolve, sep } from 'node:path'
 import { SidebarError } from './wire.ts'
 import type { ExcludeMatcher } from './exclude-patterns.ts'
+import { RECOVERY_DIRECTORY } from './file-history-types.ts'
 
 /** One explorer row. */
 export interface SidebarFsEntry {
@@ -175,9 +176,7 @@ async function readDirectory(path: string, maxEntries: number, exclude?: Exclude
   // files.exclude semantics) — BEFORE the cap, so an excluded entry never
   // consumes a row of the level's budget, and the same compiled matcher
   // filters the singleton fold probe below.
-  const visible = exclude === undefined
-    ? dirents
-    : dirents.filter(dirent => !exclude(`${prefix}${dirent.name}`, dirent.name))
+  const visible = dirents.filter(dirent => dirent.name !== RECOVERY_DIRECTORY && (exclude === undefined || !exclude(`${prefix}${dirent.name}`, dirent.name)))
   const truncated = visible.length > maxEntries
   // Build rows ONLY for the rows that survive the cap: composing a row costs
   // ~0.3µs (path concat + three flags), so an uncapped 10k level would spend

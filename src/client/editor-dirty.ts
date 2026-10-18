@@ -22,6 +22,8 @@
  */
 
 /** One registered draft: the id it was recorded under and the file. */
+import { isWithinWorkspace, resolveSidebarPath } from './paths.ts'
+
 interface DirtyEntry {
   tabId: string
   path: string
@@ -96,6 +98,14 @@ export function isEditorDirty(tabId: string, sessionId?: string): boolean {
 /** How many tabs hold unsaved drafts across every session (the unload guard). */
 export function dirtyCount(): number {
   return dirtyTabs.size
+}
+
+/** Guard explorer actions BEFORE moving a file whose draft only exists in memory. */
+export function hasUnsavedPath(sessionId: string, path: string, cwd?: string): boolean {
+  for (const [key, entry] of dirtyTabs) {
+    if (key.startsWith(`${sessionId}::`) && isWithinWorkspace(path, resolveSidebarPath(cwd, entry.path))) return true
+  }
+  return false
 }
 
 /** Subscribe to dirty-set changes; returns the disposer. */

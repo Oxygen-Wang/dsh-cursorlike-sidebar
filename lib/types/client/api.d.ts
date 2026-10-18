@@ -1,3 +1,4 @@
+import type { FileHistoryResult, FileHistoryState } from '../file-history-types.ts';
 import type { SidechatLiveEvent, SidechatLogEvent, SidechatModelCatalog, SidechatModelSelection, SidechatPendingInput, SidechatThreadInfo } from '../sidechat-core.ts';
 import type { SidebarCreateTeamTaskRequest, SidebarChildLiveView, SidebarSessionEvent, SidebarTeamTaskView, SidebarUpdateTeamTaskRequest } from '../context-types.ts';
 import type { WorkflowRunView } from '../workflow-runs.ts';
@@ -235,7 +236,6 @@ type OpenExternalResult = {
  * keeps using the DSH host route.
  */
 declare function openExternal(payload: OpenExternalPayload): Promise<OpenExternalResult>;
-/** The sidebar API surface (session scope threaded through every call). */
 export declare const api: {
     sessionCwd: (scope: SessionScope, signal?: AbortSignal) => Promise<{
         sessionId: string;
@@ -297,11 +297,17 @@ export declare const api: {
     fsRename: (scope: SessionScope, path: string, name: string) => Promise<{
         path: string;
     }>;
-    /** Permanently delete one tree row (recursive for directories; a symlink
-     *  row unlinks the link only). The UI confirms before calling this. */
-    fsRemove: (scope: SessionScope, path: string) => Promise<{
+    /** Transfer one row into a directory; copies keep both names, moves refuse conflicts. */
+    fsTransfer: (scope: SessionScope, path: string, dir: string, mode: "copy" | "move", historyGroup?: string) => Promise<{
         path: string;
     }>;
+    /** Move an entry to recovery. Undo restores it without overwriting a new file. */
+    fsRemove: (scope: SessionScope, path: string, historyGroup?: string) => Promise<{
+        path: string;
+    }>;
+    fsHistory: (scope: SessionScope, signal?: AbortSignal) => Promise<FileHistoryState>;
+    fsUndo: (scope: SessionScope, expectedId: string) => Promise<FileHistoryResult>;
+    fsRedo: (scope: SessionScope, expectedId: string) => Promise<FileHistoryResult>;
     /** Create one directory row inside `path` (single-segment name; the server
      *  refuses existing destinations, the workspace root, and — while the fence
      *  is armed — anything resolving outside the workspace). */

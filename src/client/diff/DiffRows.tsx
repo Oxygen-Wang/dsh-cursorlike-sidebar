@@ -9,7 +9,7 @@
  * supplies on demand through resolveFold (first click fetches, then they
  * toggle like any fold).
  */
-import { useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react'
 import { t } from '../locales.ts'
 import { coalesceInline, diffInline, MIN_FOLD, type DiffRow, type DiffSegment, type FoldSegment, type InlineDiff } from './rows.ts'
 import { hasBlockComment, isColored, scanLine, type CodeToken, type TokenType } from './highlight.ts'
@@ -112,10 +112,30 @@ export interface DiffRowsProps {
    *  sliced by the fold's line ranges). Absent folds without `rows` — git's
    *  unemitted gaps without a resolver — stay non-expandable markers. */
   resolveFold?: (segment: FoldSegment) => Promise<readonly DiffRow[]>
+  /**
+   * Optional per-hunk review overlay (the changes tab's session lens): tints
+   * the active hunk's rows and renders its action bar right under the last of
+   * them. `rowIndex` maps the SAME row objects the segments were built from to
+   * their index in the diff, so a row can be resolved back to its review hunk.
+   */
+  review?: {
+    readonly rowIndex: ReadonlyMap<DiffRow, number>
+    readonly hunkOfRow: ReadonlyMap<number, number>
+    readonly active: number | null
+    /** Index of the active hunk's last row (the bar renders after it). */
+    readonly activeEnd: number | null
+    /** Decisions so a reverted block reads as resolved in the snapshot. */
+    readonly decisionOfHunk: ReadonlyMap<number, 'pending' | 'keep' | 'reject'>
+    readonly bar: ReactNode
+    /** Per-line confirm buttons for one line-level hunk. */
+    readonly rowActions?: (hunkId: number) => ReactNode
+    /** Each hunk's last row index (the buttons attach there, once). */
+    readonly hunkTail?: ReadonlyMap<number, number>
+  }
 }
 
 /** One file's diff rows: fold chips between hunks, highlighted code rows. */
-export function DiffRows({ segments, lang, resolveFold }: DiffRowsProps) {
+export function DiffRows({ segments, lang, resolveFold, review }: DiffRowsProps) {
   // Long diff lines fold to one ellipsized row; the set holds expanded row keys.
   const [expandedLines, setExpandedLines] = useState<ReadonlySet<string>>(new Set())
   // Hunk-fold segments expanded by index; default collapsed.
@@ -155,12 +175,30 @@ export function DiffRows({ segments, lang, resolveFold }: DiffRowsProps) {
     const isLong = row.text.length > FOLD_THRESHOLD
     const isFolded = isLong && !expandedLines.has(rowKey)
     const blockEntry = blockEntries.get(row) ?? false
-    return (
+    const index = review?.rowIndex.get(row)
+    const hunkId = index === undefined ? undefined : review?.hunkOfRow.get(index)
+    const decision = hunkId === undefined ? undefined : review?.decisionOfHunk.get(hunkId)
+    const activeRow = hunkId !== undefined && hunkId === review?.active
+    const rejectedRow = hunkId !== undefined && review?.decisionOfHunk.get(hunkId) === 'reject'
+    const classes = [css.row]
+    if (activeRow) classes.push(css.reviewActiveRow)
+    if (rejectedRow) classes.push(css.reviewRejectedRow)
+    const lineActions = review?.rowActions !== undefined
+      && hunkId !== undefined
+      && review.hunkTail?.get(hunkId) === index
+      ? <span className={css.rowActions}>{review.rowActions(hunkId)}</span>
+      : null
+    const element = (
       <div
         key={rowKey}
-        className={css.row}
+        className={classes.join(' ')}
         data-kind={row.kind}
         data-folded={isFolded ? 'true' : undefined}
+        data-review-hunk={hunkId}
+        data-review-active={activeRow ? 'true' : undefined}
+        data-review-rejected={rejectedRow ? 'true' : undefined}
+        data-review-decision={decision}
+        data-review-side={row.oldLine !== undefined && row.newLine === undefined ? 'old' : row.newLine !== undefined && row.oldLine === undefined ? 'new' : undefined}
         onClick={isLong ? () => {
           setExpandedLines(prev => {
             const next = new Set(prev)
@@ -174,6 +212,7 @@ export function DiffRows({ segments, lang, resolveFold }: DiffRowsProps) {
         <span className={css.lineNo}>{row.oldLine !== undefined ? String(row.oldLine) : ''}</span>
         <span className={css.lineNo}>{row.newLine !== undefined ? String(row.newLine) : ''}</span>
         <span className={css.sign}>{row.kind === 'del' ? '-' : row.kind === 'add' ? '+' : row.kind === 'mod' ? '~' : ' '}</span>
+        {lineActions}
         <span className={css.text} data-folded={isFolded ? 'true' : undefined}>
           {row.kind === 'mod' && (() => {
             const inline = inlineMap.get(row)
@@ -194,13 +233,27 @@ export function DiffRows({ segments, lang, resolveFold }: DiffRowsProps) {
         </span>
       </div>
     )
+    // The review bar rides immediately below the active hunk's last row, so
+    // the buttons sit inside the diff exactly at the block they decide on.
+    if (review !== undefined && index !== undefined && index === review.activeEnd) {
+      return (
+        <Fragment key={rowKey}>
+          {element}
+          {review.bar}
+        </Fragment>
+      )
+    }
+    return element
   }
 
   let renderedRows = 0
   const renderSegment = (segment: DiffSegment, segIndex: number): ReactNode => {
     if (segment.kind === 'hunk') {
-      const capped = !expandedAll && renderedRows + segment.rows.length > MAX_ROWS
-      const rows = capped ? segment.rows.slice(0, Math.max(MAX_ROWS - renderedRows, 0)) : segment.rows
+      // Navigating to a later review line must reveal it even past the normal
+      // rendering cap, otherwise the active controls and scroll target vanish.
+      const limit = Math.max(MAX_ROWS, (review?.activeEnd ?? -4) + 4)
+      const capped = !expandedAll && renderedRows + segment.rows.length > limit
+      const rows = capped ? segment.rows.slice(0, Math.max(limit - renderedRows, 0)) : segment.rows
       renderedRows += rows.length
       return (
         <div key={`hunk-${String(segIndex)}`}>
@@ -284,7 +337,7 @@ export function DiffRows({ segments, lang, resolveFold }: DiffRowsProps) {
   return (
     <div className={css.rows}>
       {parts}
-      {renderedRows >= MAX_ROWS && !expandedAll && (
+      {segments.reduce((sum, segment) => sum + (segment.kind === 'hunk' ? segment.rows.length : 0), 0) > renderedRows && !expandedAll && (
         <button type="button" className={css.expand} onClick={() => { setExpandedAll(true) }}>
           {t('diffExpand', { count: segments.reduce((sum, s) => sum + (s.kind === 'hunk' ? s.rows.length : 0), 0) - renderedRows })}
         </button>

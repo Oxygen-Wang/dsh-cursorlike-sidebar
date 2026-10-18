@@ -19,3 +19,12 @@ export declare const IGNORE_PATTERN_LIMIT = 64;
  * @returns positive patterns in file order, at most {@link IGNORE_PATTERN_LIMIT}.
  */
 export declare function parseIgnoreFile(content: string): string[];
+/**
+ * Append newly dropped workspace paths to a root `.ignore` text, keeping the
+ * existing lines/comments and avoiding duplicates. The result always ends in
+ * a newline so a later append starts on its own line.
+ * @param content - the current file ('' when it does not exist).
+ * @param patterns - workspace-relative positive patterns to add.
+ * @returns the next file text, or the same text when nothing was added.
+ */
+export declare function appendIgnorePatterns(content: string, patterns: readonly string[]): string;

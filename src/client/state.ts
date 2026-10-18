@@ -811,7 +811,7 @@ function uniqueNodeId(id: string, seen: Set<string>, reid: Map<string, string>):
 
 /**
  * Validate one persisted tab record. @returns the clean tab, `'diff'` for an
- * ephemeral diff tab (dropped everywhere — diff tabs never survive a reload),
+ * malformed diff tab (valid diff coordinates survive a reload),
  * or undefined when the record is malformed (structural corruption when it
  * comes from a split-tree leaf; a malformed FLOAT tab only drops the window).
  */
@@ -819,7 +819,22 @@ function sanitizePersistedTab(tab: unknown): SidebarTab | 'diff' | undefined {
   if (tab === null || typeof tab !== 'object') return undefined
   const candidate = tab as Record<string, unknown>
   if (typeof candidate.id !== 'string' || typeof candidate.title !== 'string') return undefined
-  if (candidate.type === 'diff') return 'diff'
+  if (candidate.type === 'diff') {
+    const ref = candidate.diff as Record<string, unknown> | undefined
+    if (!ref || typeof ref !== 'object') return 'diff'
+    const optionalPathsValid = ['worktree', 'repoRoot'].every(key => ref[key] === undefined || typeof ref[key] === 'string')
+    if (!optionalPathsValid) return 'diff'
+    let diff: SidebarDiffRef
+    if (ref.kind === 'worktree' && typeof ref.path === 'string' && typeof ref.staged === 'boolean'
+      && (ref.untracked === undefined || typeof ref.untracked === 'boolean')) {
+      diff = { kind: 'worktree', path: ref.path, staged: ref.staged, ...(typeof ref.untracked === 'boolean' ? { untracked: ref.untracked } : {}) }
+    } else if (ref.kind === 'commit' && ['hash', 'hashFull', 'subject'].every(key => typeof ref[key] === 'string')) {
+      diff = { kind: 'commit', hash: ref.hash as string, hashFull: ref.hashFull as string, subject: ref.subject as string }
+    } else return 'diff'
+    if (typeof ref.worktree === 'string') diff.worktree = ref.worktree
+    if (typeof ref.repoRoot === 'string') diff.repoRoot = ref.repoRoot
+    return { id: candidate.id, title: candidate.title, type: 'diff', diff, ...(candidate.meta !== undefined ? { meta: candidate.meta } : {}) }
+  }
   // Tab types are an open set (external plugins register their own); accept
   // any string type here — an unregistered type renders an <OrphanedTab/> at
   // view time and recovers if its plugin loads later.

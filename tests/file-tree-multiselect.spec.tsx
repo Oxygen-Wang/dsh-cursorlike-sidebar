@@ -274,4 +274,24 @@ describe('FileTree multi-selection', () => {
     // The removed row left the selection; the refused one stays for a retry.
     expect(selectedNames(harness.container)).toEqual(['b.ts'])
   })
+
+  it('selects visible rows with Ctrl+A and asks before Delete', async () => {
+    harness = await mountTree()
+    const target = rowByName(harness.container, 'a.ts')
+    act(() => { target.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', ctrlKey: true, bubbles: true, cancelable: true })) })
+    expect(selectedNames(harness.container)).toEqual(['sub', 'a.ts', 'b.ts'])
+    act(() => { target.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true, cancelable: true })) })
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain('3')
+    expect(fsRemove).not.toHaveBeenCalled()
+  })
+
+  it('starts F2 rename from a focused row and opens a keyboard context menu', async () => {
+    harness = await mountTree()
+    const target = rowByName(harness.container, 'a.ts')
+    act(() => { target.dispatchEvent(new KeyboardEvent('keydown', { key: 'F10', shiftKey: true, bubbles: true, cancelable: true })) })
+    expect(document.querySelector('[role="menu"]')?.textContent).toContain('Rename')
+    act(() => { target.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })) })
+    act(() => { target.dispatchEvent(new KeyboardEvent('keydown', { key: 'F2', bubbles: true, cancelable: true })) })
+    expect(harness.container.querySelector<HTMLInputElement>('input[class*="explorerRenameInput"]')?.value).toBe('a.ts')
+  })
 })

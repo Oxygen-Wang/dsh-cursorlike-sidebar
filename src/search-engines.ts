@@ -224,6 +224,7 @@ export function escapeGlob(query: string): string {
  *  matched case-insensitively (fd honors --ignore-case; rg uses --iglob),
  *  mirroring the walk's toLowerCase comparison. */
 export const SKIP_DIR_NAMES: readonly string[] = [
+  '.dsh-cursorlike-recovery',
   '.git',
   'node_modules',
   '.pnpm-store',

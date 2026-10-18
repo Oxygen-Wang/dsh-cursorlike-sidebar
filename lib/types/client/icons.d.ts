@@ -46,3 +46,5 @@ export declare const IconListOutline16: ({ size, className }: IconProps) => impo
 export declare const IconArrowLeftOutline16: ({ size, className }: IconProps) => import("react").JSX.Element;
 /** Three columns: the Miller (multi-column) file browser. */
 export declare const IconColumnsOutline16: ({ size, className }: IconProps) => import("react").JSX.Element;
+/** Eye with a slash: drop a tree row here to add it to the root `.ignore`. */
+export declare const IconEyeOffOutline16: ({ size, className }: IconProps) => import("react").JSX.Element;

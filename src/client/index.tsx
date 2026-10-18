@@ -30,6 +30,7 @@ import { SideCardSection } from './SideCardSection.tsx'
 import { api } from './api.ts'
 import { installDiffApprovalPolish } from './diff-approval-polish.ts'
 import { installDiffActionsBridge } from './diff-actions-bridge.ts'
+import { NativeReviewActions } from './native-review-actions.tsx'
 
 installDiffApprovalPolish()
 installDiffActionsBridge()
@@ -462,6 +463,12 @@ export function apply(ctx: Context): void {
     // it); the section reads/writes the prefs through the plugin's own
     // fenced settings route, keeps the shared store in sync, and renders the
     // declarative enable/disable inventory from the tab/viewer registry.
+    ctx.slots.inject('deliverables.review.file.actions', () => ctx.slots.register({
+      name: 'deliverables.review.file.actions',
+      id: 'cursorlike-review-actions',
+      order: 100,
+    }, NativeReviewActions))
+
     ctx.slots.inject('settings.section', () => ctx.slots.register({
       name: 'settings.section',
       id: 'better-sidebar',

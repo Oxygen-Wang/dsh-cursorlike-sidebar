@@ -192,6 +192,25 @@ afterEach(() => {
 })
 
 describe('ChangesTab', () => {
+  it('reopens the selected comparison from persisted tab metadata', async () => {
+    mockGit([])
+    mockGraph()
+    vi.spyOn(api, 'changesOps').mockResolvedValue({ events: [], lastSeq: 0 })
+    const container = document.createElement('div')
+    document.body.append(container)
+    const root = createRoot(container)
+    try {
+      mount(root, { id: 'git', type: 'git', title: 'Changes', meta: {
+        paneTab: 'diff', selection: { kind: 'git', ref: { kind: 'commit', hash: GRAPH_HASH.slice(0, 7), hashFull: GRAPH_HASH, subject: GRAPH_SUBJECT } },
+      } })
+      await settle()
+      expect(paneOf(container).textContent).toContain('graph-only-diff-line')
+      expect(api.gitCommitDiff).toHaveBeenCalled()
+    } finally {
+      act(() => { root.unmount() })
+      container.remove()
+    }
+  })
   it('uses the official underline Tabs with keyboard navigation, persisted lens and refresh', async () => {
     mockGit([])
     const ops = vi.spyOn(api, 'changesOps').mockResolvedValue({ events: [], lastSeq: 0 })
@@ -1153,7 +1172,7 @@ describe('ChangesTab bottom pane tabs', () => {
       await act(async () => { paneTabs(container)[0]!.click() })
       await settle()
       expect(paneOf(container).querySelector(detailsSelector)).not.toBeNull()
-      expect(updateTab).toHaveBeenLastCalledWith('git', { meta: { paneTab: 'details' } }, 'session')
+      expect(updateTab).toHaveBeenLastCalledWith('git', { meta: expect.objectContaining({ paneTab: 'details', selection: expect.objectContaining({ kind: 'git' }) }) }, 'session')
     } finally {
       act(() => { root.unmount() })
       container.remove()

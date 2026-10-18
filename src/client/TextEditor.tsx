@@ -43,7 +43,28 @@ import { useSelectionPopup } from './selection-popup.ts'
 import { linesOfSelection } from './selection-payload.ts'
 import type { SelectionReference } from './selection-reference.ts'
 import { writeSelectionDrag } from './cursorlike-interactions.ts'
-import { diffLines } from './diff/rows.ts'
+import {
+  activeHunkOf,
+  buildPendingReview,
+  keepAllReviewHunks,
+  keepReviewHunk,
+  nextPending,
+  previousPending,
+  readStoredPendingReview,
+  rejectAllPendingHunks,
+  rejectReviewHunk,
+  REVIEW_UNDO_LIMIT,
+  reviewSummary,
+  reviewText,
+  storePendingReview,
+  undoReviewStep,
+  walkReview,
+  type HunkPlacement,
+  type PendingReview,
+  type ReviewHunk,
+  type ReviewStep,
+  type ReviewUndo,
+} from './diff/review-model.ts'
 import { analyzeMarkdownHtml } from './markdown-html.ts'
 import { LazyMermaidMarkdown, MarkdownDocument, type MarkdownHtmlMedia } from './MarkdownHtml.tsx'
 import { LargeFileView } from './LargeFileView.tsx'
@@ -126,67 +147,95 @@ function offsetAt(text: string, line: number, column: number): number {
   return Math.min(start + column, end < 0 ? text.length : end)
 }
 
-/**
- * One pending agent/external edit shown in the inline review bar. `oldText`
- * is the content the editor last displayed, `newText` the content the host
- * just loaded; accepting only drops the review, rejecting writes `oldText`
- * back, and either decision can be undone for a short window.
- */
-interface EditorReview {
-  path: string
-  oldText: string
-  newText: string
-  added: number
-  removed: number
-  /** 1-based line after which the inline Keep/Revert bar sits. */
-  lastLine: number
-  /** New-file lines touched by the change, tinted while the review is open
-   *  (`add` = inserted line, `mod` = line whose text changed). Deleted-only
-   *  lines have no new-file line to tint — the bar's counts still report them. */
-  changedLines: readonly ReviewChangedLine[]
+/** The payload carried into CodeMirror's review decorations. */
+interface ReviewDecorationInfo {
+  review: PendingReview
+  placements: ReadonlyMap<number, HunkPlacement>
+  /** The hunk the action bar is on (null when the review just finished). */
+  active: number | null
+  /** A dirty draft must not be overwritten by a reject. */
+  dirty: boolean
+  onKeep: (id: number) => void
+  onReject: (id: number) => void
+  onPrevious: () => void
+  onNext: () => void
+  onKeepAll: () => void
+  onRejectAll: () => void
 }
 
-interface ReviewChangedLine {
-  line: number
-  kind: 'add' | 'mod'
-}
-
-/** The most recent review decision, kept only for the undo window. */
-interface ReviewDecision {
-  review: EditorReview
-  kind: 'keep' | 'reject'
-}
-
-/** The payload carried into CodeMirror's inline review widget. */
-interface InlineReviewInfo extends EditorReview {
-  pos: number
-  /** A dirty draft must not be overwritten by a revert. */
-  revertDisabled: boolean
-  onKeep: () => void
-  onReject: () => void
-}
-
-const setInlineReview = StateEffect.define<InlineReviewInfo | null>()
+const setReviewDecorations = StateEffect.define<ReviewDecorationInfo | null>()
 
 /**
- * The action row rendered in the document flow after the last changed line.
- * Keeping it as a CodeMirror widget means it also pushes the following lines
- * down (instead of covering them) and scrolls with the text.
+ * The removed lines of a pending hunk, in red, rendered as a block above the
+ * lines that replaced them (Cursor's inline diff puts the old text inside the
+ * document flow; a widget keeps the line numbers and the scroll position
+ * meaningful). Covers both plain deletions and the old half of a rewrite.
  */
-class ReviewWidget extends WidgetType {
-  constructor(private readonly info: InlineReviewInfo) {
+class RemovedLinesWidget extends WidgetType {
+  constructor(
+    private readonly lines: readonly string[],
+    private readonly active: boolean,
+  ) {
     super()
   }
 
-  override eq(other: ReviewWidget): boolean {
-    return other.info.path === this.info.path
-      && other.info.lastLine === this.info.lastLine
-      && other.info.added === this.info.added
-      && other.info.removed === this.info.removed
-      && other.info.revertDisabled === this.info.revertDisabled
-      && other.info.oldText.length === this.info.oldText.length
-      && other.info.newText.length === this.info.newText.length
-      && other.info.changedLines.length === this.info.changedLines.length
+  override eq(other: RemovedLinesWidget): boolean {
+    return other.active === this.active
+      && other.lines.length === this.lines.length
+      && other.lines.every((line, index) => line === this.lines[index])
+  }
+
+  override ignoreEvent(): boolean {
+    return true
+  }
+
+  override toDOM(): HTMLElement {
+    const wrap = document.createElement('div')
+    wrap.className = this.active
+      ? `${css.editorDiffRemoved ?? ''} ${css.editorDiffRemovedActive ?? ''}`
+      : css.editorDiffRemoved ?? ''
+    wrap.dataset.cursorlikeReviewRemoved = ''
+    wrap.contentEditable = 'false'
+    for (const line of this.lines) {
+      const row = document.createElement('div')
+      row.className = css.editorDiffRemovedLine ?? ''
+      row.textContent = line === '' ? '\u00a0' : line
+      wrap.append(row)
+    }
+    return wrap
+  }
+}
+
+/** The action bar's data: which hunk, how far along, and the callbacks. */
+interface ReviewBarInfo {
+  index: number
+  total: number
+  remaining: number
+  dirty: boolean
+  onKeep: () => void
+  onReject: () => void
+  onPrevious: () => void
+  onNext: () => void
+  onKeepAll: () => void
+  onRejectAll: () => void
+}
+
+/**
+ * The per-hunk action bar rendered in the document flow after the hunk's last
+ * line: keep or revert THIS block (which advances to the next one), navigate,
+ * or resolve every remaining hunk at once. A CodeMirror widget pushes the
+ * following lines down and scrolls with the text.
+ */
+class ReviewBarWidget extends WidgetType {
+  constructor(private readonly info: ReviewBarInfo) {
+    super()
+  }
+
+  override eq(other: ReviewBarWidget): boolean {
+    return other.info.index === this.info.index
+      && other.info.total === this.info.total
+      && other.info.remaining === this.info.remaining
+      && other.info.dirty === this.info.dirty
   }
 
   override ignoreEvent(): boolean {
@@ -201,13 +250,35 @@ class ReviewWidget extends WidgetType {
 
     const text = document.createElement('span')
     text.className = css.editorReviewText ?? ''
-    text.textContent = `${t('reviewChanged')}  +${this.info.added} / −${this.info.removed}`
+    text.textContent = t('reviewHunkProgress', {
+      index: this.info.index,
+      total: this.info.total,
+      remaining: this.info.remaining,
+    })
     wrap.append(text)
+
+    const nav = (label: string, title: string, onClick: () => void): HTMLButtonElement => {
+      const button = document.createElement('button')
+      button.type = 'button'
+      button.className = css.editorReviewNav ?? ''
+      button.textContent = label
+      button.title = title
+      button.addEventListener('click', (event) => {
+        event.preventDefault()
+        event.stopPropagation()
+        onClick()
+      })
+      return button
+    }
+    wrap.append(
+      nav('‹', t('reviewPrevious'), this.info.onPrevious),
+      nav('›', t('reviewNext'), this.info.onNext),
+    )
 
     const keep = document.createElement('button')
     keep.type = 'button'
     keep.className = css.editorReviewKeep ?? ''
-    keep.textContent = `${t('reviewKeep')} Ctrl+K`
+    keep.textContent = `${t('reviewKeepHunk')} Ctrl+K`
     keep.addEventListener('click', (event) => {
       event.preventDefault()
       event.stopPropagation()
@@ -215,74 +286,138 @@ class ReviewWidget extends WidgetType {
     })
     wrap.append(keep)
 
-    const revert = document.createElement('button')
-    revert.type = 'button'
-    revert.className = css.editorReviewReject ?? ''
-    revert.textContent = `${t('reviewReject')} Ctrl+J`
-    revert.disabled = this.info.revertDisabled
-    if (this.info.revertDisabled) revert.title = t('unsaved')
-    revert.addEventListener('click', (event) => {
+    const reject = document.createElement('button')
+    reject.type = 'button'
+    reject.className = css.editorReviewReject ?? ''
+    reject.textContent = `${t('reviewRejectHunk')} Ctrl+J`
+    reject.disabled = this.info.dirty
+    if (this.info.dirty) reject.title = t('unsaved')
+    reject.addEventListener('click', (event) => {
       event.preventDefault()
       event.stopPropagation()
       this.info.onReject()
     })
-    wrap.append(revert)
+    wrap.append(reject)
+
+    const keepAll = document.createElement('button')
+    keepAll.type = 'button'
+    keepAll.className = css.editorReviewKeep ?? ''
+    keepAll.textContent = `${t('reviewKeepAll')} Ctrl+Alt+K`
+    keepAll.disabled = this.info.remaining === 0
+    keepAll.addEventListener('click', (event) => {
+      event.preventDefault()
+      event.stopPropagation()
+      this.info.onKeepAll()
+    })
+    wrap.append(keepAll)
+
+    const rejectAll = document.createElement('button')
+    rejectAll.type = 'button'
+    rejectAll.className = css.editorReviewReject ?? ''
+    rejectAll.textContent = `${t('reviewRejectAll')} Ctrl+Alt+J`
+    rejectAll.disabled = this.info.dirty
+    if (this.info.dirty) rejectAll.title = t('unsaved')
+    rejectAll.addEventListener('click', (event) => {
+      event.preventDefault()
+      event.stopPropagation()
+      this.info.onRejectAll()
+    })
+    wrap.append(rejectAll)
     return wrap
   }
 }
 
-/**
- * Build the review's document decorations: one tinted line per touched new-file
- * line plus the action row after the last changed line. Ranges MUST be sorted —
- * line starts are ascending by construction and the widget sits at the end of
- * the last touched line, so appending it last keeps the set ordered.
- */
-function inlineReviewDecorations(info: InlineReviewInfo, doc: { lines: number; line(n: number): { from: number } }): DecorationSet {
-  const ranges: Range<Decoration>[] = []
-  const seen = new Set<number>()
-  for (const change of info.changedLines) {
-    const lineNumber = Math.min(Math.max(1, change.line), doc.lines)
-    if (seen.has(lineNumber)) continue
-    seen.add(lineNumber)
-    ranges.push(Decoration.line({
-      class: change.kind === 'add' ? css.editorReviewLineAdd : css.editorReviewLineMod,
-    }).range(doc.line(lineNumber).from))
+/** The removed text of one pending hunk (plain deletions + rewrite old halves). */
+function removedLinesOf(review: PendingReview, hunk: ReviewHunk): string[] {
+  const lines: string[] = []
+  for (const row of hunk.rows) {
+    const item = review.rows[row]
+    if (item === undefined) continue
+    if (item.kind === 'del' || (item.kind === 'mod' && item.newSide !== true)) lines.push(item.text)
   }
-  ranges.push(Decoration.widget({ widget: new ReviewWidget(info), side: 1 }).range(info.pos))
-  return Decoration.set(ranges)
+  return lines
 }
 
-/** Decorations holding at most one inline review action row. */
-const inlineReviewField = StateField.define<DecorationSet>({
+/**
+ * Build the review's document decorations: a red removed-lines block above
+ * each changed block, a green tint on every line that stays, and the action
+ * bar under the active hunk. Ranges are collected in document order; the
+ * `sort` flag keeps CodeMirror tolerant of the widgets that share a line
+ * boundary.
+ */
+function reviewDecorations(info: ReviewDecorationInfo, doc: { lines: number; line(n: number): { from: number; to: number } }): DecorationSet {
+  const ranges: Range<Decoration>[] = []
+  const clamp = (line: number): number => Math.min(Math.max(1, line), Math.max(doc.lines, 1))
+  for (const hunk of info.review.hunks) {
+    if (hunk.decision === 'reject') continue
+    const placement = info.placements.get(hunk.id)
+    if (placement === undefined) continue
+    const active = hunk.id === info.active
+    const anchor = Math.min(placement.anchor, doc.lines)
+    const removed = removedLinesOf(info.review, hunk)
+    if (removed.length > 0) {
+      const pos = anchor <= 0 ? 0 : doc.line(clamp(anchor)).to
+      ranges.push(Decoration.widget({ widget: new RemovedLinesWidget(removed, active), side: -1 }).range(pos))
+    }
+    for (let index = 0; index < placement.lines; index += 1) {
+      const line = clamp(anchor + 1 + index)
+      const classes = [css.editorReviewLineAdd ?? '']
+      if (active) {
+        // The active hunk reads as one green box: stronger fill, an outline on
+        // its first/last line, and a full frame around a single-line hunk.
+        classes.push(css.editorReviewLineActive ?? '')
+        if (placement.lines === 1) classes.push(css.editorReviewLineOnly ?? '')
+        else if (index === 0) classes.push(css.editorReviewLineFirst ?? '')
+        else if (index === placement.lines - 1) classes.push(css.editorReviewLineLast ?? '')
+      }
+      ranges.push(Decoration.line({ class: classes.filter(name => name !== '').join(' ') }).range(doc.line(line).from))
+    }
+    if (active) {
+      // A pure-deletion hunk has no line of its own: its bar sits right under
+      // the red block, at the same anchor.
+      const barPos = placement.lines === 0
+        ? (anchor <= 0 ? 0 : doc.line(clamp(anchor)).to)
+        : doc.line(clamp(anchor + placement.lines)).to
+      const remaining = info.review.hunks.filter(item => item.decision === 'pending').length
+      const index = info.review.hunks.findIndex(item => item.id === hunk.id) + 1
+      ranges.push(Decoration.widget({
+        widget: new ReviewBarWidget({
+          index,
+          total: info.review.hunks.length,
+          remaining,
+          dirty: info.dirty,
+          onKeep: () => info.onKeep(hunk.id),
+          onReject: () => info.onReject(hunk.id),
+          onPrevious: info.onPrevious,
+          onNext: info.onNext,
+          onKeepAll: info.onKeepAll,
+          onRejectAll: info.onRejectAll,
+        }),
+        side: 1,
+      }).range(barPos))
+    }
+  }
+  return Decoration.set(ranges, true)
+}
+
+/** Decorations holding the pending review's tints, blocks and action bar. */
+const reviewDecorationField = StateField.define<DecorationSet>({
   create: () => Decoration.none,
   update(decorations, transaction) {
     let next = decorations.map(transaction.changes)
     for (const effect of transaction.effects) {
-      if (!effect.is(setInlineReview)) continue
-      if (effect.value === null) {
-        next = Decoration.none
-        continue
-      }
-      next = inlineReviewDecorations(effect.value, transaction.state.doc)
+      if (!effect.is(setReviewDecorations)) continue
+      next = effect.value === null ? Decoration.none : reviewDecorations(effect.value, transaction.state.doc)
     }
     return next
   },
   provide: field => CodeMirrorView.decorations.from(field),
 })
 
-/** One pending review kept in localStorage, so a restart can restore it. */
-interface StoredEditorReview {
-  version: 1
-  path: string
-  oldText: string
-  newText: string
-  added: number
-  removed: number
-  lastLine: number
-  changedLines: readonly ReviewChangedLine[]
-}
-
-const REVIEW_STORE_PREFIX = 'dsh-cursorlike-sidebar:review:'
+const REVIEW_STORE_PREFIX = 'dsh-cursorlike-sidebar:review2:'
+/** The pre-per-hunk key prefix: those entries are dead (v1 reviews cannot be
+ *  split into hunks) and are removed whenever the new ones are touched. */
+const LEGACY_REVIEW_STORE_PREFIX = 'dsh-cursorlike-sidebar:review:'
 /** Do not put whole multi-hundred-KB files into localStorage. */
 const REVIEW_STORE_MAX_TEXT = 400_000
 
@@ -291,51 +426,44 @@ function reviewStoreKey(sessionId: string, path: string): string {
   return `${REVIEW_STORE_PREFIX}${encodeURIComponent(sessionId)}:${encodeURIComponent(path)}`
 }
 
-/** Persist one still-pending review. Storage/quota failures are non-fatal. */
-function saveStoredReview(sessionId: string, review: EditorReview): void {
-  if (review.oldText.length > REVIEW_STORE_MAX_TEXT || review.newText.length > REVIEW_STORE_MAX_TEXT) return
+/** Drop the superseded whole-file review entry of one file. */
+function dropLegacyStoredReview(sessionId: string, path: string): void {
   try {
-    const value: StoredEditorReview = {
-      version: 1,
-      path: review.path,
-      oldText: review.oldText,
-      newText: review.newText,
-      added: review.added,
-      removed: review.removed,
-      lastLine: review.lastLine,
-      changedLines: review.changedLines,
-    }
-    localStorage.setItem(reviewStoreKey(sessionId, review.path), JSON.stringify(value))
+    localStorage.removeItem(`${LEGACY_REVIEW_STORE_PREFIX}${encodeURIComponent(sessionId)}:${encodeURIComponent(path)}`)
+  } catch {
+    /* storage unavailable */
+  }
+}
+
+/** Persist one still-pending review. Storage/quota failures are non-fatal. */
+function saveStoredReview(sessionId: string, review: PendingReview): void {
+  dropLegacyStoredReview(sessionId, review.path)
+  if (review.base.length > REVIEW_STORE_MAX_TEXT || review.target.length > REVIEW_STORE_MAX_TEXT) return
+  try {
+    localStorage.setItem(reviewStoreKey(sessionId, review.path), JSON.stringify(storePendingReview(review)))
   } catch {
     /* storage unavailable: the review still works for this session */
   }
 }
 
-/** Load one pending review if it still matches the file's current bytes. */
-function loadStoredReview(sessionId: string, path: string, content: string): EditorReview | null {
+/** Load one pending review if the file still holds the reviewed decisions. */
+function loadStoredReview(sessionId: string, path: string, content: string): PendingReview | null {
   try {
     const raw = localStorage.getItem(reviewStoreKey(sessionId, path))
     if (raw === null) return null
-    const value = JSON.parse(raw) as Partial<StoredEditorReview> | null
-    if (value === null || value.version !== 1 || value.path !== path) return null
-    if (typeof value.oldText !== 'string' || typeof value.newText !== 'string') return null
-    if (!sameDocument(value.newText, content) || sameDocument(value.oldText, value.newText)) return null
-    return {
-      path,
-      oldText: value.oldText,
-      newText: value.newText,
-      added: typeof value.added === 'number' ? value.added : 0,
-      removed: typeof value.removed === 'number' ? value.removed : 0,
-      lastLine: typeof value.lastLine === 'number' ? value.lastLine : 1,
-      changedLines: Array.isArray(value.changedLines) ? value.changedLines : [],
-    }
+    const restored = readStoredPendingReview(JSON.parse(raw) as unknown, path)
+    if (restored === null || restored.hunks.length === 0) return null
+    // The persisted decisions were applied to disk: the file must still hold
+    // exactly their reconstruction, or a newer write superseded the review.
+    return sameDocument(reviewText(restored), content) ? restored : null
   } catch {
     return null
   }
 }
 
-/** Drop one persisted review (keep/reject means it is resolved). */
+/** Drop one persisted review (resolved, or superseded by a new change). */
 function removeStoredReview(sessionId: string, path: string): void {
+  dropLegacyStoredReview(sessionId, path)
   try {
     localStorage.removeItem(reviewStoreKey(sessionId, path))
   } catch {
@@ -349,13 +477,19 @@ export function TextEditor(props: FileViewerProps) {
   /** The editor's current text (null while clean); preview renders this. */
   const [draft, setDraft] = useState<string | null>(null)
   const [dirty, setDirty] = useState(false)
-  const [review, setReview] = useState<EditorReview | null>(null)
-  const [reviewDecision, setReviewDecision] = useState<ReviewDecision | null>(null)
-  const reviewRef = useRef<EditorReview | null>(null)
-  /** True while a reject/undo write is in flight (a double click must not
-   *  issue a second write against the same mtime). */
-  const reviewWriteRef = useRef(false)
-  const reviewBarRef = useRef<HTMLDivElement>(null)
+  /** The agent's change, split into per-hunk decisions (null = no review). */
+  const [review, setReview] = useState<PendingReview | null>(null)
+  const reviewRef = useRef<PendingReview | null>(null)
+  /** The finished review's summary, kept for the undo bar after it closes. */
+  const [reviewResult, setReviewResult] = useState<{ kind: 'keep' | 'reject'; kept: number; rejected: number } | null>(null)
+  /** Review actions awaitable in order (a reject writes before the next one). */
+  const reviewQueueRef = useRef<Promise<void>>(Promise.resolve())
+  /** One undo entry per decision, newest last. */
+  const reviewUndoRef = useRef<{ review: PendingReview; undo: ReviewUndo }[]>([])
+  /** How many undo entries exist (React-visible mirror of the ref). */
+  const [undoCount, setUndoCount] = useState(0)
+  /** The undo bar's container (its Ctrl+Z must not be swallowed by CodeMirror). */
+  const undoBarRef = useRef<HTMLDivElement>(null)
   /** Content/path seen by the last render, for agent-edit detection. */
   const previousContentRef = useRef<{ path: string; text: string | undefined }>({ path, text: content })
   /** The first content after a path switch is a load, never an agent edit. */
@@ -523,6 +657,7 @@ export function TextEditor(props: FileViewerProps) {
    * leaving the viewport) — see selection-popup.ts.
    */
   const selectionPopup = useSelectionPopup<SelectionReference>({
+    placement: 'surface-bottom-right',
     sessionId: scope.sessionId,
     onCommit: (reference) => { insertSelectionReference(ctx, scope.sessionId, reference) },
     label: () => t('addToConversation'),
@@ -577,8 +712,10 @@ export function TextEditor(props: FileViewerProps) {
     setSaveState('idle')
     setConflict(false)
     reviewRef.current = null
+    reviewUndoRef.current = []
+    setUndoCount(0)
     setReview(null)
-    setReviewDecision(null)
+    setReviewResult(null)
     // The freshly loaded bytes are the new save baseline.
     mtimeRef.current = props.mtimeMs ?? null
     selectionPopup.hide()
@@ -588,8 +725,8 @@ export function TextEditor(props: FileViewerProps) {
   }, [path])
 
   // Detect an agent/external edit: the host publishes new `content` without the
-  // editor typing. The diff is shown in the review bar; accepting drops it,
-  // rejecting writes the previous bytes back (and either can be undone).
+  // editor typing. The change is split into per-hunk decisions (the inline
+  // review): Keep/Revert apply to the bar's hunk and advance to the next one.
   useEffect(() => {
     const previous = previousContentRef.current
     previousContentRef.current = { path, text: content }
@@ -597,7 +734,7 @@ export function TextEditor(props: FileViewerProps) {
     if (previous.path !== path) {
       reviewRef.current = null
       setReview(null)
-      setReviewDecision(null)
+      setReviewResult(null)
       skipReviewRef.current = true
       return
     }
@@ -614,31 +751,12 @@ export function TextEditor(props: FileViewerProps) {
     // Above this size the LCS table is not worth blocking the editor on;
     // the Changes tab remains the diff surface for huge files.
     if (previous.text.length + content.length > 400_000) return
-    let added = 0
-    let removed = 0
-    let lastLine = 1
-    const changedLines: ReviewChangedLine[] = []
-    try {
-      const rows = diffLines(previous.text, content)
-      for (const row of rows) {
-        if (row.kind === 'add') added += 1
-        else if (row.kind === 'del') removed += 1
-        else if (row.kind === 'mod') { added += 1; removed += 1 }
-        if (row.newLine !== undefined && row.kind !== 'context' && row.kind !== 'meta') lastLine = row.newLine
-        if (row.newLine !== undefined && (row.kind === 'add' || row.kind === 'mod')) {
-          changedLines.push({ line: row.newLine, kind: row.kind })
-        }
-      }
-    } catch {
-      return
-    }
-    if (added + removed === 0) return
-    const active = reviewRef.current
-    const next: EditorReview = active === null
-      ? { path, oldText: previous.text, newText: content, added, removed, lastLine, changedLines }
-      : { ...active, newText: content, added, removed, lastLine, changedLines }
+    const next = buildPendingReview(previous.text, content, path)
+    if (next.hunks.length === 0) return
     reviewRef.current = next
-    if (active === null) setReviewDecision(null)
+    reviewUndoRef.current = []
+    setUndoCount(0)
+    setReviewResult(null)
     setReview(next)
     saveStoredReview(scope.sessionId, next)
     // The effect reads the host's current mtime alongside the new bytes.
@@ -646,12 +764,14 @@ export function TextEditor(props: FileViewerProps) {
   }, [content, path, readOnly])
 
   // Restore a pending review after a restart when the file still holds the
-  // reviewed bytes. The keep/reject actions clear this storage entry.
+  // reviewed decisions' reconstruction. Resolving the review clears the entry.
   useEffect(() => {
     if (content === undefined || reviewRef.current !== null) return
     const stored = loadStoredReview(scope.sessionId, path, content)
     if (stored === null) return
     reviewRef.current = stored
+    reviewUndoRef.current = []
+    setUndoCount(0)
     previousContentRef.current = { path, text: content }
     setReview(stored)
   }, [content, path, scope.sessionId])
@@ -720,7 +840,7 @@ export function TextEditor(props: FileViewerProps) {
       doc: content,
       extensions: [
         CodeMirrorView.lineWrapping,
-        inlineReviewField,
+        reviewDecorationField,
         // The change bar sits BEFORE the line numbers (VS Code's own order):
         // a thin colored bar at the far left, the number tinted beside it.
         // The compartment carries all of it (hover blame included), so the
@@ -1093,10 +1213,14 @@ export function TextEditor(props: FileViewerProps) {
       // from: saving an agent edit IS accepting it, and it must not come back
       // as "changed by the model" against the pre-edit bytes on the next write.
       previousContentRef.current = { path, text }
-      if (reviewRef.current !== null && sameDocument(reviewRef.current.newText, text)) {
+      // Saving the whole document resolves whatever review was open on it.
+      if (reviewRef.current !== null) {
         reviewRef.current = null
+        reviewUndoRef.current = []
+        setUndoCount(0)
         setReview(null)
-        setReviewDecision(null)
+        setReviewResult(null)
+        removeStoredReview(scope.sessionId, path)
       }
       // The saved bytes are a new revision of the uncommitted diff: re-read
       // the change set (the file's XY status code usually stays the same, so
@@ -1215,7 +1339,7 @@ export function TextEditor(props: FileViewerProps) {
     const rect = sel.getRangeAt(0).getBoundingClientRect()
     const lines = linesOfSelection(mdText, text)
     selectionPopup.show(
-      { path, lines: lines ?? undefined },
+      { path, lines: lines ?? undefined, text },
       rect.left + rect.width / 2,
       rect.top,
     )
@@ -1233,152 +1357,270 @@ export function TextEditor(props: FileViewerProps) {
   const showingPreview = !readOnly && mode === 'preview' && (markdown || html || jsonl)
   const saveLabel = saveState === 'saving' ? t('loading') : saveState === 'saved' ? t('saved') : saveState === 'failed' ? t('saveFailed') : ''
 
-  /** Replace the live document when the host cannot reload it for us. */
+  /** Replace the live document when a review decision changes its bytes. */
   const replaceEditorText = (text: string): void => {
+    const view = viewRef.current
     suppressDirtyRef.current = true
     setDraft(text)
     setDirty(false)
-    const view = viewRef.current
     if (view !== null) {
+      const doc = view.state.doc
+      const selection = view.state.selection.main
+      const headLine = doc.lineAt(selection.head)
+      const target = Math.min(selection.head - headLine.from, Math.max(0, text.length - 1))
       view.dispatch({
-        changes: { from: 0, to: view.state.doc.length, insert: text },
+        changes: { from: 0, to: doc.length, insert: text },
+        selection: { anchor: offsetAt(text, Math.min(headLine.number, Math.max(1, text.split('\n').length)), target) },
         annotations: Transaction.addToHistory.of(false),
       })
     }
     queueMicrotask(() => { suppressDirtyRef.current = false })
   }
 
-  /** Accept the pending edit: keep the bytes on disk, drop the review. */
-  const keepReview = (): void => {
+  /** Publish one applied review state to React, storage and the document. */
+  const applyReviewState = (next: PendingReview, text: string | null): void => {
+    reviewRef.current = next
+    const documentText = text ?? reviewText(next)
+    if (text !== null) {
+      replaceEditorText(text)
+      setGitRevision(value => value + 1)
+    }
+    previousContentRef.current = { path, text: documentText }
+    if (next.decided) {
+      setReview(null)
+      const summary = reviewSummary(next)
+      setReviewResult({
+        kind: summary.rejected > 0 ? 'reject' : 'keep',
+        kept: summary.kept,
+        rejected: summary.rejected,
+      })
+      removeStoredReview(scope.sessionId, path)
+    } else {
+      setReviewResult(null)
+      setReview(next)
+      saveStoredReview(scope.sessionId, next)
+    }
+  }
+
+  /** Run review actions one at a time: a reject writes before the next step. */
+  const enqueueReview = (task: () => Promise<void>): void => {
+    reviewQueueRef.current = reviewQueueRef.current.then(task, task).catch(() => {})
+  }
+
+  /** Record one step's undo entry (bounded) and publish its state. */
+  const commitReviewStep = (step: ReviewStep): void => {
+    reviewUndoRef.current.push({ review: step.review, undo: step.undo })
+    if (reviewUndoRef.current.length > REVIEW_UNDO_LIMIT) reviewUndoRef.current.shift()
+    setUndoCount(reviewUndoRef.current.length)
+    applyReviewState(step.review, step.text)
+    queueMicrotask(() => { viewRef.current?.focus() })
+  }
+
+  /** Keep one hunk (the bar's, or the clicked one) and advance to the next. */
+  const keepHunk = (id?: number): void => {
+    const before = reviewRef.current
+    if (before === null) return
+    const targetId = id ?? activeHunkOf(before)
+    if (targetId === null) return
+    const step = keepReviewHunk(before, targetId)
+    if (step.review === before) return
+    commitReviewStep(step)
+  }
+
+  /** Reject one hunk: write the old-side bytes, then advance. */
+  const rejectHunk = (id?: number): void => {
+    const current = reviewRef.current
+    if (current === null || dirtyRef.current) return
+    const targetId = id ?? activeHunkOf(current)
+    if (targetId === null) return
+    enqueueReview(async () => {
+      const before = reviewRef.current
+      if (before === null || dirtyRef.current) return
+      const step = rejectReviewHunk(before, targetId)
+      if (step.text === null || step.review === before) return
+      try {
+        const result = await api.fsWrite(scope, path, step.text, mtimeRef.current)
+        if (typeof result.mtimeMs === 'number') mtimeRef.current = result.mtimeMs
+        commitReviewStep(step)
+      } catch {
+        setSaveState('failed')
+      }
+    })
+  }
+
+  /** Keep every remaining hunk in one step (Ctrl+Alt+K). */
+  const keepAllHunks = (): void => {
+    const before = reviewRef.current
+    if (before === null || !before.hunks.some(hunk => hunk.decision === 'pending')) return
+    const step = keepAllReviewHunks(before)
+    commitReviewStep(step)
+  }
+
+  /** Reject every remaining hunk in one step (Ctrl+Alt+J). */
+  const rejectAllHunks = (): void => {
+    if (reviewRef.current === null || dirtyRef.current) return
+    enqueueReview(async () => {
+      const before = reviewRef.current
+      if (before === null || dirtyRef.current) return
+      if (!before.hunks.some(hunk => hunk.decision === 'pending')) return
+      const step = rejectAllPendingHunks(before)
+      if (step.text === null) return
+      try {
+        const result = await api.fsWrite(scope, path, step.text, mtimeRef.current)
+        if (typeof result.mtimeMs === 'number') mtimeRef.current = result.mtimeMs
+        commitReviewStep(step)
+      } catch {
+        setSaveState('failed')
+      }
+    })
+  }
+
+  /** Move the bar to the next/previous pending hunk (no decision). */
+  const navigateReview = (direction: 'next' | 'previous'): void => {
     const current = reviewRef.current
     if (current === null) return
-    reviewRef.current = null
-    setReview(null)
-    setReviewDecision({ review: current, kind: 'keep' })
-    removeStoredReview(scope.sessionId, path)
-    // The kept bytes are the baseline the NEXT agent edit is compared against.
-    previousContentRef.current = { path, text: current.newText }
-    queueMicrotask(() => viewRef.current?.focus())
+    const active = activeHunkOf(current)
+    if (active === null) return
+    const targetId = direction === 'next'
+      ? nextPending(active, current.hunks)
+      : previousPending(active, current.hunks)
+    if (targetId === null || targetId === active) return
+    const next: PendingReview = { ...current, active: targetId }
+    reviewRef.current = next
+    setReview(next)
+    queueMicrotask(() => { viewRef.current?.focus() })
   }
 
-  /** Reject the pending edit: write the previous bytes back, then show it. */
-  const rejectReview = async (): Promise<void> => {
-    const current = reviewRef.current
-    if (current === null || dirtyRef.current || reviewWriteRef.current) return
-    reviewWriteRef.current = true
-    try {
-      const result = await api.fsWrite(scope, path, current.oldText, mtimeRef.current)
-      if (typeof result.mtimeMs === 'number') mtimeRef.current = result.mtimeMs
-      reviewRef.current = null
-      setReview(null)
-      setReviewDecision({ review: current, kind: 'reject' })
-      removeStoredReview(scope.sessionId, path)
-      replaceEditorText(current.oldText)
-      // Disk and document now hold the OLD bytes: a later agent edit must be
-      // diffed against those, not against the rejected revision.
-      previousContentRef.current = { path, text: current.oldText }
-      queueMicrotask(() => viewRef.current?.focus())
-    } catch {
-      setSaveState('failed')
-    } finally {
-      reviewWriteRef.current = false
+  /** Undo the last review decision (Ctrl+Z). */
+  const undoReviewStepAction = (): void => {
+    if (dirtyRef.current) return
+    const entry = reviewUndoRef.current[reviewUndoRef.current.length - 1]
+    if (entry === undefined || reviewRef.current === null) return
+    const restored = undoReviewStep(entry.review, entry.undo)
+    const commit = (): void => {
+      const last = reviewUndoRef.current[reviewUndoRef.current.length - 1]
+      if (last === entry) reviewUndoRef.current.pop()
+      setUndoCount(reviewUndoRef.current.length)
+      setReviewResult(null)
+      applyReviewState(restored.review, restored.text)
+      queueMicrotask(() => { viewRef.current?.focus() })
     }
-  }
-
-  /** Undo the last keep/reject: restore the review bar and (for reject) bytes. */
-  const undoReview = async (): Promise<void> => {
-    const decision = reviewDecision
-    if (decision === null || dirtyRef.current || reviewWriteRef.current) return
-    if (decision.kind === 'keep') {
-      setReviewDecision(null)
-      reviewRef.current = decision.review
-      setReview(decision.review)
-      saveStoredReview(scope.sessionId, decision.review)
-      previousContentRef.current = { path, text: decision.review.newText }
-      queueMicrotask(() => viewRef.current?.focus())
+    if (restored.text === null) {
+      commit()
       return
     }
-    reviewWriteRef.current = true
-    try {
-      const result = await api.fsWrite(scope, path, decision.review.newText, mtimeRef.current)
-      if (typeof result.mtimeMs === 'number') mtimeRef.current = result.mtimeMs
-      setReviewDecision(null)
-      reviewRef.current = decision.review
-      setReview(decision.review)
-      saveStoredReview(scope.sessionId, decision.review)
-      replaceEditorText(decision.review.newText)
-      previousContentRef.current = { path, text: decision.review.newText }
-      queueMicrotask(() => viewRef.current?.focus())
-    } catch {
-      setSaveState('failed')
-    } finally {
-      reviewWriteRef.current = false
-    }
+    const writeText = restored.text
+    enqueueReview(async () => {
+      try {
+        const result = await api.fsWrite(scope, path, writeText, mtimeRef.current)
+        if (typeof result.mtimeMs === 'number') mtimeRef.current = result.mtimeMs
+      } catch {
+        setSaveState('failed')
+        return
+      }
+      commit()
+    })
   }
 
-  // Publish the pending review into the CodeMirror document as an inline
-  // action row after the last changed line. The view outlives React renders;
-  // the effect only mutates its decorations.
+  // Publish the pending review into the CodeMirror document: red removed-line
+  // blocks, green tints on the kept lines, and the per-hunk action bar. The
+  // view outlives React renders; the effect only mutates its decorations.
   useEffect(() => {
     const view = viewRef.current
     if (view === null) return
     if (review === null) {
-      view.dispatch({ effects: setInlineReview.of(null) })
+      view.dispatch({ effects: setReviewDecorations.of(null) })
       return
     }
-    const line = Math.min(Math.max(1, review.lastLine), view.state.doc.lines)
     view.dispatch({
-      effects: setInlineReview.of({
-        ...review,
-        pos: view.state.doc.line(line).to,
-        revertDisabled: dirty,
-        onKeep: keepReview,
-        onReject: () => { void rejectReview() },
+      effects: setReviewDecorations.of({
+        review,
+        placements: walkReview(review).placements,
+        active: activeHunkOf(review),
+        dirty,
+        onKeep: keepHunk,
+        onReject: rejectHunk,
+        onPrevious: () => { navigateReview('previous') },
+        onNext: () => { navigateReview('next') },
+        onKeepAll: keepAllHunks,
+        onRejectAll: rejectAllHunks,
       }),
     })
-    // The handlers close over the live refs; including their per-render
-    // identities would re-dispatch this effect on every render.
+    // The handlers close over live refs; their per-render identities would
+    // re-dispatch this effect on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [review, content, dirty])
 
-  // Ctrl/Cmd+K keeps, Ctrl/Cmd+J rejects, Ctrl/Cmd+Z undoes the last decision.
-  // Only while the editor (or the review bar) owns focus; the composer and
-  // terminal keep their own keys. Ctrl+Z is NOT stolen from CodeMirror's own
-  // text undo once the user has typed since the decision: the shortcut undoes
-  // the decision only while the document still holds the exact bytes that
-  // decision produced.
+  // Follow the action bar when it advances: put the caret on the new hunk and
+  // scroll it into view (the Cursor-style "jump to the next diff").
   useEffect(() => {
-    if (review === null && reviewDecision === null) return
+    if (review === null) return
+    const active = activeHunkOf(review)
+    if (active === null) return
+    const placement = walkReview(review).placements.get(active)
+    const view = viewRef.current
+    if (placement === undefined || view === null) return
+    const lineNumber = Math.min(Math.max(placement.anchor + 1, 1), view.state.doc.lines)
+    const target = view.state.doc.line(lineNumber).from
+    view.dispatch({ selection: { anchor: target } })
+    view.requestMeasure()
+    requestAnimationFrame(() => {
+      const block = view.lineBlockAt(target)
+      view.scrollDOM.scrollTop = Math.max(0, block.top - 48)
+      view.requestMeasure()
+    })
+  }, [review])
+
+  // Ctrl/Cmd+K keeps the current hunk, Ctrl/Cmd+J rejects it, Ctrl+Alt+K/J
+  // resolves every remaining hunk, Ctrl/Cmd+Z walks the last decision back.
+  // Only while the editor (or a review bar) owns focus; the composer and
+  // terminal keep their own keys. Ctrl+Z is not stolen from CodeMirror's own
+  // text undo once the user has typed since the decision.
+  useEffect(() => {
+    if (review === null && reviewResult === null) return
     const onKey = (event: KeyboardEvent): void => {
-      if (event.defaultPrevented || event.isComposing || event.altKey) return
+      if (event.defaultPrevented || event.isComposing) return
       if (!(event.ctrlKey || event.metaKey)) return
       const key = event.key.toLowerCase()
       const active = document.activeElement
-      const inlineActions = active instanceof Element && active.closest('[data-cursorlike-review-actions]') !== null
+      const inActions = active instanceof Element && active.closest('[data-cursorlike-review-actions]') !== null
       const inEditor = viewRef.current?.hasFocus === true
-      const inBar = reviewBarRef.current?.contains(active) === true
-      if (!(inEditor || inBar || inlineActions)) return
-      if (review !== null && (key === 'k' || key === 'j')) {
+      const inUndo = undoBarRef.current?.contains(active) === true
+      if (!(inEditor || inActions || inUndo)) return
+      if (key === 'z' && !event.shiftKey && !event.altKey) {
+        if (reviewUndoRef.current.length === 0) return
         event.preventDefault()
         event.stopPropagation()
-        if (key === 'k') keepReview()
-        else void rejectReview()
+        undoReviewStepAction()
         return
       }
-      if (reviewDecision !== null && key === 'z' && !event.shiftKey) {
-        const live = viewRef.current?.state.doc.toString()
-        const expected = reviewDecision.kind === 'keep' ? reviewDecision.review.newText : reviewDecision.review.oldText
-        // Focus on the undo bar always means the review decision; focus in the
-        // editor only while its text is still the post-decision document.
-        if (!inBar && (live === undefined || !sameDocument(live, expected))) return
+      if (review === null) return
+      if (event.altKey) {
+        if (key === 'k') {
+          event.preventDefault()
+          event.stopPropagation()
+          keepAllHunks()
+        } else if (key === 'j') {
+          event.preventDefault()
+          event.stopPropagation()
+          rejectAllHunks()
+        }
+        return
+      }
+      if (key === 'k') {
         event.preventDefault()
         event.stopPropagation()
-        void undoReview()
+        keepHunk()
+      } else if (key === 'j') {
+        event.preventDefault()
+        event.stopPropagation()
+        rejectHunk()
       }
     }
     document.addEventListener('keydown', onKey, true)
     return () => { document.removeEventListener('keydown', onKey, true) }
   })
+
   // Per-feature sandbox escape hatch: the global side card setting (warned)
   // plus a per-surface temporary unlock. The unlock state starts at the
   // "default unsafe" pref so a preview can open straight into the red
@@ -1504,36 +1746,71 @@ export function TextEditor(props: FileViewerProps) {
           />
         </>
       )}
-      {review !== null && showingPreview && (
-        <div className={css.editorReviewDock} role="status" aria-live="polite">
-          <div className={css.editorReviewBar} data-cursorlike-review-actions="">
-            <span className={css.editorReviewText}>
-              {t('reviewChanged')} <span className={css.editorReviewCounts}>+{review.added} / −{review.removed}</span>
-            </span>
-            <button type="button" className={css.editorReviewKeep} onClick={keepReview}>
-              {t('reviewKeep')} <kbd className={css.editorReviewKbd}>Ctrl+K</kbd>
-            </button>
-            <button
-              type="button"
-              className={css.editorReviewReject}
-              onClick={() => { void rejectReview() }}
-              disabled={dirty}
-              title={dirty ? t('unsaved') : undefined}
-            >
-              {t('reviewReject')} <kbd className={css.editorReviewKbd}>Ctrl+J</kbd>
-            </button>
+      {review !== null && showingPreview && (() => {
+        const active = activeHunkOf(review)
+        const summary = reviewSummary(review)
+        const index = active === null ? 0 : review.hunks.findIndex(hunk => hunk.id === active) + 1
+        return (
+          <div className={css.editorReviewDock} role="status" aria-live="polite">
+            <div className={css.editorReviewBar} data-cursorlike-review-actions="">
+              <span className={css.editorReviewText}>
+                {t('reviewHunkProgress', { index, total: summary.total, remaining: summary.pending })}
+              </span>
+              <button
+                type="button"
+                className={css.editorReviewNav}
+                title={t('reviewPrevious')}
+                aria-label={t('reviewPrevious')}
+                onClick={() => { navigateReview('previous') }}
+              >‹</button>
+              <button
+                type="button"
+                className={css.editorReviewNav}
+                title={t('reviewNext')}
+                aria-label={t('reviewNext')}
+                onClick={() => { navigateReview('next') }}
+              >›</button>
+              <button
+                type="button"
+                className={css.editorReviewKeep}
+                onClick={() => { if (active !== null) keepHunk(active) }}
+              >
+                {t('reviewKeepHunk')} <kbd className={css.editorReviewKbd}>Ctrl+K</kbd>
+              </button>
+              <button
+                type="button"
+                className={css.editorReviewReject}
+                onClick={() => { if (active !== null) rejectHunk(active) }}
+                disabled={dirty}
+                title={dirty ? t('unsaved') : undefined}
+              >
+                {t('reviewRejectHunk')} <kbd className={css.editorReviewKbd}>Ctrl+J</kbd>
+              </button>
+              <button type="button" className={css.editorReviewKeep} onClick={keepAllHunks}>
+                {t('reviewKeepAll')} <kbd className={css.editorReviewKbd}>Ctrl+Alt+K</kbd>
+              </button>
+              <button
+                type="button"
+                className={css.editorReviewReject}
+                onClick={rejectAllHunks}
+                disabled={dirty}
+                title={dirty ? t('unsaved') : undefined}
+              >
+                {t('reviewRejectAll')} <kbd className={css.editorReviewKbd}>Ctrl+Alt+J</kbd>
+              </button>
+            </div>
           </div>
-        </div>
-      )}
-      {reviewDecision !== null && (
-        <div className={css.editorReviewDock} ref={reviewBarRef} role="status" aria-live="polite">
+        )
+      })()}
+      {reviewResult !== null && (
+        <div className={css.editorReviewDock} ref={undoBarRef} role="status" aria-live="polite">
           <div className={css.editorReviewUndo}>
-            <span>{reviewDecision.kind === 'keep' ? t('reviewKept') : t('reviewRejected')}</span>
+            <span>{reviewResult.kind === 'keep' ? t('reviewKept') : t('reviewRejected')}</span>
             <button
               type="button"
               className={css.editorReviewUndoButton}
-              onClick={() => { void undoReview() }}
-              disabled={dirty}
+              onClick={undoReviewStepAction}
+              disabled={dirty || undoCount === 0}
               title={dirty ? t('unsaved') : undefined}
             >
               {t('reviewUndo')} <kbd className={css.editorReviewKbd}>Ctrl+Z</kbd>
@@ -1654,7 +1931,7 @@ export function TextEditor(props: FileViewerProps) {
           ref={selectionPopup.buttonRef}
           draggable
           onDragStart={(event) => { selectionPopup.drag(event.dataTransfer) }}
-          title={t('addToConversation')}
+          title={`Ctrl+L ${t('addToConversation')}`}
           aria-keyshortcuts="Control+L"
           className={css.selectionPopup}
           style={{ left: selectionPopup.popup.left, top: selectionPopup.popup.top }}
@@ -1663,7 +1940,7 @@ export function TextEditor(props: FileViewerProps) {
           onMouseDown={(event) => { event.preventDefault() }}
           onClick={selectionPopup.commit}
         >
-          {t('addToConversation')}
+          Ctrl+L {t('addToConversation')}
         </button>,
         document.body,
       )}

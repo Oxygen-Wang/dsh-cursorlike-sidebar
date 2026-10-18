@@ -589,6 +589,42 @@
 /* An op's error body: the kit's error ink with the row's inset bar. */
 .readError { border-left: 3px solid var(--dsw-alias-state-error-primary); margin: 6px 8px; padding: 6px 10px; word-break: break-word; }
 
+/* ── The session op's per-hunk review bar ───────────────────────────────── */
+.reviewBar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 5px 10px;
+  margin: 2px 0;
+  border-top: 1px solid var(--dsw-alias-border-l1);
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+  background: color-mix(in srgb, var(--dsw-alias-bg-layer-1) 94%, transparent);
+}
+.reviewProgress { flex: none; font: var(--dsw-font-xxs-12); color: var(--dsw-alias-label-secondary); font-variant-numeric: tabular-nums; }
+.reviewHint { margin-left: auto; font: var(--dsw-font-xxxs-11); color: var(--dsw-alias-label-tertiary); white-space: nowrap; }
+.reviewNav, .reviewKeep, .reviewReject {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font: var(--dsw-font-xxs-12);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.reviewNav { min-width: 20px; justify-content: center; color: var(--dsw-alias-label-secondary); }
+.reviewNav:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
+.reviewKeep { color: var(--dsw-alias-state-success-primary); border-color: color-mix(in srgb, var(--dsw-alias-state-success-primary) 55%, var(--dsw-alias-border-l1)); }
+.reviewKeep:hover:not(:disabled) { background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 12%, transparent); }
+.reviewReject { color: var(--dsw-alias-state-error-primary); border-color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 55%, var(--dsw-alias-border-l1)); }
+.reviewReject:hover:not(:disabled) { background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 12%, transparent); }
+.reviewNav:disabled, .reviewKeep:disabled, .reviewReject:disabled { opacity: 0.45; cursor: default; }
+.reviewKbd { padding: 0 3px; border: 1px solid var(--dsw-alias-border-l1); border-radius: 3px; color: var(--dsw-alias-label-secondary); font: var(--dsw-font-xxxs-11); }
+
 /* The op preview whose callId left the loaded event window. */
 .paneGone { flex: none; display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--dsw-alias-border-l1); }
 

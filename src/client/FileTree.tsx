@@ -74,6 +74,7 @@ import { uploadItemsFromDrop, uploadItemsFromFiles, type UploadItem } from './up
 import { useDirectoryWatch } from './use-dir-watch.ts'
 import { usePolling } from './use-polling.ts'
 import { writeReferenceDrag } from './cursorlike-interactions.ts'
+import { readFileClipboard, topLevelPaths, writeFileClipboard, type FileTransferMode } from './file-clipboard.ts'
 import css from './sidebar.module.css'
 
 interface LevelData {
@@ -546,6 +547,8 @@ export function FileTree(props: {
   onPathDeleted?: (path: string, isDir: boolean) => void
   /** Bump to wipe the level cache and reload the visible set. */
   refreshTick: number
+  onTransferRequest?: (dir: string, paths: string[], mode: FileTransferMode) => void
+  onBeforeRemove?: (paths: string[]) => boolean
   /** Upload into `dir` (absolute, inside the workspace); runs in the caller. */
   onUploadRequest: (dir: string, items: UploadItem[]) => void
   /** True while an upload is in flight (drops are ignored). */
@@ -1213,6 +1216,7 @@ export function FileTree(props: {
    */
   const performDelete = (target: { path: string; isDir: boolean; scope: FsScope }): void => {
     if (!sameScope(target.scope, scopeOf(propsRef.current))) return
+    if (propsRef.current.onBeforeRemove?.([target.path]) === false) return
     const generation = scopeGenRef.current
     api.fsRemove(target.scope, target.path)
       .then(() => {
@@ -1407,7 +1411,9 @@ export function FileTree(props: {
       setConfirmDeleteSelected(null)
       return
     }
-    const paths = [...selectedRef.current]
+    const paths = topLevelPaths([...selectedRef.current])
+    if (live.onBeforeRemove?.(paths) === false) { setConfirmDeleteSelected(null); return }
+    const group = paths.length > 1 ? crypto.randomUUID() : undefined
     setConfirmDeleteSelected(null)
     if (paths.length === 0) return
     const generation = scopeGenRef.current
@@ -1416,7 +1422,7 @@ export function FileTree(props: {
       const removed: string[] = []
       for (const path of paths) {
         try {
-          await api.fsRemove(armed, path)
+          await (group === undefined ? api.fsRemove(armed, path) : api.fsRemove(armed, path, group))
         } catch (error: unknown) {
           if (generation !== scopeGenRef.current) return
           setActionError(error instanceof Error ? error.message : String(error))
@@ -2190,10 +2196,55 @@ export function FileTree(props: {
         // A click on the body itself (below the last row) drops the selection.
         if (event.target === event.currentTarget) clearSelection()
       }}
+      tabIndex={0}
+      onContextMenu={event => {
+        if ((event.target as HTMLElement).closest('[data-cursorlike-path],input,textarea,[role="menu"],[role="dialog"]') || cwd === undefined) return
+        handleContextMenu(event, cwd, true)
+      }}
       onKeyDown={(event) => {
-        if (event.key === 'Escape') clearSelection()
-        if (event.isDefaultPrevented() || event.nativeEvent.isComposing || event.altKey || event.shiftKey || !(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'l') return
         const element = event.target as HTMLElement
+        if (element.closest('input,textarea,[contenteditable="true"],[role="dialog"]') || event.nativeEvent.isComposing) return
+        if (event.key === 'Escape') clearSelection()
+        if (!event.isDefaultPrevented() && !event.altKey) {
+          const row = element.closest<HTMLElement>('[data-cursorlike-path]')
+          const path = row?.dataset.cursorlikePath
+          const picked = selectedRef.current.size > 0 ? [...selectedRef.current] : path === undefined ? [] : [path]
+          if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === 'a') {
+            event.preventDefault(); event.stopPropagation()
+            for (const entry of visibleRowsRef.current) kindRef.current.set(entry.path, entry.isDir)
+            setSelection(new Set(visibleRowsRef.current.map(entry => entry.path)))
+            return
+          }
+          if (!event.ctrlKey && !event.metaKey && !event.shiftKey && event.key === 'F2' && picked.length === 1 && picked[0] !== cwd && !busy) {
+            event.preventDefault(); event.stopPropagation()
+            setRenaming({ path: picked[0]!, value: baseName(picked[0]!) })
+            return
+          }
+          if (!event.ctrlKey && !event.metaKey && !event.shiftKey && event.key === 'Delete' && picked.length > 0 && !busy) {
+            const armed = scopeOf(propsRef.current)
+            if (armed !== undefined && !picked.includes(armed.cwd)) {
+              event.preventDefault(); event.stopPropagation()
+              if (selectedRef.current.size === 0 && path !== undefined) {
+                kindRef.current.set(path, row?.dataset.cursorlikeDirectory === 'true')
+                setSelection(new Set([path]))
+              }
+              setConfirmDeleteSelected(armed)
+            }
+            return
+          }
+          if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
+            event.preventDefault(); event.stopPropagation()
+            const target = row ?? element
+            const rect = target.getBoundingClientRect()
+            const targetPath = path ?? cwd
+            if (targetPath !== undefined) {
+              if (!selectedRef.current.has(targetPath)) setSelection(new Set([targetPath]))
+              setRowMenu({ path: targetPath, isDir: row?.dataset.cursorlikeDirectory === 'true' || path === undefined, x: rect.left, y: rect.bottom })
+            }
+            return
+          }
+        }
+        if (event.isDefaultPrevented() || event.nativeEvent.isComposing || event.altKey || event.shiftKey || !(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'l') return
         if (element.closest('input,textarea,[contenteditable="true"]')) return
         const picked = [...selectedRef.current]
         const row = element.closest<HTMLElement>('[data-cursorlike-path]')
@@ -2363,6 +2414,11 @@ export function FileTree(props: {
           // 6: copy, then the mutations (never on the workspace root row).
           { id: 'relative', label: t('copyRelative'), icon: <IconCopyOutlineRegular size={14} /> },
           { id: 'absolute', label: t('copyAbsolute'), icon: <IconCopyOutlineRegular size={14} /> },
+          ...(rowMenu !== null && rowMenu.path !== cwd ? [
+            { id: 'copy-file', label: t('copy'), disabled: busy },
+            { id: 'cut-file', label: t('cut'), disabled: busy },
+          ] : []),
+          { id: 'paste-file', label: t('paste'), disabled: busy || props.onTransferRequest === undefined || !readFileClipboard({ sessionId, cwd })?.paths.length },
           ...(rowMenu !== null && rowMenu.path !== cwd
             ? [
                 { id: 'mutate-sep', type: 'separator' } as MenuEntry,
@@ -2375,6 +2431,15 @@ export function FileTree(props: {
           const target = rowMenu
           if (target === null) return
           setRowMenu(null)
+          if (id === 'copy-file' || id === 'cut-file') {
+            writeFileClipboard({ sessionId, cwd }, selectedRef.current.has(target.path) ? [...selectedRef.current] : [target.path], id === 'cut-file' ? 'move' : 'copy')
+            return
+          }
+          if (id === 'paste-file') {
+            const value = readFileClipboard({ sessionId, cwd })
+            if (value !== undefined) props.onTransferRequest?.(target.isDir ? target.path : parentOf(target.path), value.paths, value.mode)
+            return
+          }
           if (id === 'open-new-tab') {
             onOpenFileNewTab?.(target.path)
             return
@@ -2452,16 +2517,13 @@ export function FileTree(props: {
         anchor={<span />}
       />
 
-      {/* The single-row delete confirmation: destructive and permanent (no host
-          trash), so it always lands here first — the shared kit dialog, the
-          same shape the git lens uses for discard/revert/cherry-pick. */}
+      {/* Confirm removal from the workspace; history retains the recoverable row. */}
       <ConfirmDialog
         open={confirmDelete !== null}
         title={confirmDelete === null ? '' : t('deleteTitle', { name: confirmDelete.name })}
-        description={confirmDelete === null ? '' : t(confirmDelete.isDir ? 'deleteDescDir' : 'deleteDescFile')}
+        description={t('fileDeleteRecoverable')}
         confirmLabel={t('delete')}
         cancelLabel={t('cancel')}
-        danger
         onConfirm={() => {
           const pending = confirmDelete
           if (pending === null) return
@@ -2476,10 +2538,9 @@ export function FileTree(props: {
       <ConfirmDialog
         open={confirmDeleteSelected !== null}
         title={t('deleteSelectedTitle', { count: selected.size })}
-        description={t('deleteSelectedDesc')}
+        description={t('fileDeleteRecoverable')}
         confirmLabel={t('deleteSelected')}
         cancelLabel={t('cancel')}
-        danger
         busy={deletingSelected}
         onConfirm={() => {
           const armed = confirmDeleteSelected

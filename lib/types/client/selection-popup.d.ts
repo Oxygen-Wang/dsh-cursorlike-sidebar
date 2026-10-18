@@ -42,6 +42,7 @@ export interface SelectionPopup<T> {
     top: number;
 }
 export interface SelectionPopupOptions<T> {
+    placement?: 'selection' | 'surface-bottom-right';
     sessionId?: string;
     /** Commit the payload into the composer draft (button click / Ctrl+L). */
     onCommit(payload: T): void;

@@ -1,0 +1,58 @@
+.toolbar { flex: none; padding: 8px 12px; border-bottom: 1px solid var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-base, var(--dsw-alias-bg-layer-1)); }
+.actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; max-width: 100%; min-width: 0; font-size: 12px; line-height: 20px; }
+.actions button { white-space: nowrap; }
+.actions button, .lineActions button { font: inherit; cursor: pointer; border: 1px solid var(--dsw-alias-border-l2); border-radius: 6px; padding: 3px 9px; background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary); transition: background .12s, border-color .12s; }
+.actions button:hover:not(:disabled), .lineActions button:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); border-color: var(--dsw-alias-border-l1); }
+.actions .keep, .lineActions .keep { color: var(--dsw-alias-state-success-primary); }
+.actions .reject, .lineActions .reject { color: var(--dsw-alias-state-error-primary); }
+.actions button:disabled, .lineActions button:disabled { cursor: default; opacity: .4; }
+.actions button:focus-visible, .lineActions button:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 2px; }
+.status { color: var(--dsw-alias-label-secondary); margin-right: auto; white-space: nowrap; }
+.resolved { color: var(--dsw-alias-label-tertiary); font-size: 11px; white-space: nowrap; }
+:global([data-cursorlike-native-review]) { container-type: inline-size; container-name: cursorlike-review; }
+:global([data-cursorlike-native-review]) :global([data-diff-line]) { flex-shrink: 0; }
+.error { color: var(--dsw-alias-state-error-primary); }
+.lineActions { display: inline-flex; align-items: center; gap: 6px; font: var(--dsw-font-xxxs-strong-11); }
+.lineActions button[aria-pressed="true"] { font-weight: 700; background: color-mix(in srgb, currentColor 16%, var(--dsw-alias-bg-layer-1)); box-shadow: inset 0 0 0 1px currentColor; }
+:global([data-cursorlike-native-review]) :global([data-cursorlike-native-line]) { position: relative; padding-right: 0; column-gap: 6px; }
+:global([data-cursorlike-native-review]) :global([data-cursorlike-native-layout="unified"]) { grid-template-columns: 3.5em 3.5em 1.2em minmax(0, 1fr) max-content; --native-action-column: 5; }
+:global([data-cursorlike-native-review]) :global([data-cursorlike-native-layout="column"]) { grid-template-columns: 3.5em minmax(0, 1fr) max-content; --native-action-column: 3; }
+:global([data-cursorlike-native-review]) :global([data-cursorlike-native-layout="split"]) { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) max-content; --native-action-column: 3; }
+:global([data-cursorlike-native-line]) > span:not([data-cursorlike-native-line-actions]) { min-width: 0; }
+:global([data-cursorlike-native-line]) > span:not([data-cursorlike-native-line-actions]):nth-child(1) { grid-row: 1; grid-column: 1; }
+:global([data-cursorlike-native-line]) > span:not([data-cursorlike-native-line-actions]):nth-child(2) { grid-row: 1; grid-column: 2; }
+:global([data-cursorlike-native-line]) > span:not([data-cursorlike-native-line-actions]):nth-child(3) { grid-row: 1; grid-column: 3; }
+:global([data-cursorlike-native-line]) > span:not([data-cursorlike-native-line-actions]):nth-child(4) { grid-row: 1; grid-column: 4; }
+:global([data-cursorlike-native-review]) :global([data-cursorlike-native-line-actions]) { position: static; grid-column: var(--native-action-column); grid-row: 1; align-self: start; width: max-content; padding-right: 8px; white-space: nowrap; }
+.actions kbd { margin-left: 4px; font: inherit; opacity: .8; }
+:global([data-cursorlike-native-review]) :global([data-diff-line="add"]) { color: var(--dsw-alias-state-success-primary); }
+:global([data-cursorlike-native-review]) :global([data-diff-line="del"]) { color: var(--dsw-alias-state-error-primary); }
+:global([data-cursorlike-native-review]) :global([data-cursorlike-native-color="add"]) { color: var(--dsw-alias-state-success-primary); }
+:global([data-cursorlike-native-review]) :global([data-cursorlike-native-color="del"]) { color: var(--dsw-alias-state-error-primary); }
+:global([data-cursorlike-native-review]) :global([data-diff-line="add"]) :global([data-diff-code]) span,
+:global([data-cursorlike-native-review]) :global([data-cursorlike-native-color="add"]) :global([data-diff-code]) span { color: var(--dsw-alias-state-success-primary) !important; }
+:global([data-cursorlike-native-review]) :global([data-diff-line="del"]) :global([data-diff-code]) span,
+:global([data-cursorlike-native-review]) :global([data-cursorlike-native-color="del"]) :global([data-diff-code]) span { color: var(--dsw-alias-state-error-primary) !important; }
+:global([data-cursorlike-native-active="true"]) { box-shadow: inset 2px 0 0 var(--dsw-alias-state-business-primary); }
+/* A resolved block reads like ordinary file content. Undo only changes the
+   decision attribute, so the original comparison returns without refetching. */
+:global([data-cursorlike-native-review]) :global([data-cursorlike-native-decision]:not([data-cursorlike-native-decision="pending"])) {
+  background: var(--dsw-alias-bg-base, var(--dsw-alias-bg-layer-1)); color: var(--dsw-alias-label-primary); --diff-gutter-fill: transparent; --diff-marker: transparent;
+}
+:global([data-cursorlike-native-decision]:not([data-cursorlike-native-decision="pending"])) > span:not([data-cursorlike-native-line-actions]),
+:global([data-cursorlike-native-decision]:not([data-cursorlike-native-decision="pending"])) :global([data-cursorlike-native-color]) {
+  background: transparent; color: var(--dsw-alias-label-primary); box-shadow: none;
+}
+:global([data-cursorlike-native-review]) :global([data-cursorlike-native-decision]:not([data-cursorlike-native-decision="pending"])) :global([data-diff-code]) span { color: var(--dsw-alias-label-primary) !important; }
+:global([data-cursorlike-native-decision="keep"][data-diff-line="del"]),
+:global([data-cursorlike-native-decision="reject"][data-diff-line="add"]) { display: none; }
+:global([data-cursorlike-native-decision="keep"]) > :global([data-cursorlike-native-color="del"]),
+:global([data-cursorlike-native-decision="reject"]) > :global([data-cursorlike-native-color="add"]) { visibility: hidden; }
+:global([data-cursorlike-native-layout="unified"][data-cursorlike-native-decision]:not([data-cursorlike-native-decision="pending"])) > span:nth-child(3) { visibility: hidden; }
+
+@container cursorlike-review (max-width: 640px) {
+  :global([data-cursorlike-native-review]) :global([data-cursorlike-native-layout="unified"]) { grid-template-columns: 2.5em 2.5em 1em minmax(0, 1fr); }
+  :global([data-cursorlike-native-review]) :global([data-cursorlike-native-layout="column"]) { grid-template-columns: 2.5em minmax(0, 1fr); }
+  :global([data-cursorlike-native-review]) :global([data-cursorlike-native-layout="split"]) { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  :global([data-cursorlike-native-review]) :global([data-cursorlike-native-line-actions]) { grid-column: 1 / -1; grid-row: 2; justify-self: end; padding: 4px 8px; }
+}

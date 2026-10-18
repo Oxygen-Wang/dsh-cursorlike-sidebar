@@ -3,6 +3,7 @@ import type { SidebarDiffRef } from '../state.ts';
 import { type DiffFile, type DiffRow, type FoldSegment } from './rows.ts';
 /** The loaded state of one git diff target. */
 export interface GitDiffTarget {
+    effectiveStaged: boolean | null;
     /** A fetch is in flight (true only while nothing has loaded yet, or after a refresh drops the data). */
     loading: boolean;
     error: string | null;

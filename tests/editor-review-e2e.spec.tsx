@@ -114,10 +114,12 @@ async function tick(): Promise<void> {
 function docText(container: HTMLElement): string {
   const content = container.querySelector('.cm-content')
   if (content === null) return ''
-  // The inline action row is a widget INSIDE the content element: reading the
-  // document must not pick its button labels up.
+  // The inline action row and the removed-lines block are widgets INSIDE the
+  // content element: reading the document must not pick their text up.
   const clone = content.cloneNode(true) as HTMLElement
-  for (const actions of clone.querySelectorAll('[data-cursorlike-review-actions]')) actions.remove()
+  for (const widget of clone.querySelectorAll('[data-cursorlike-review-actions], [data-cursorlike-review-removed]')) {
+    widget.remove()
+  }
   return clone.textContent ?? ''
 }
 
@@ -161,7 +163,7 @@ describe('EditorHost + TextEditor pending edit review', () => {
       expect(docText(view.container)).toBe('body-2')
       const actions = view.container.querySelector('[data-cursorlike-review-actions]')
       expect(actions).not.toBeNull()
-      expect(actions!.textContent).toContain('File changed')
+      expect(actions!.textContent).toContain('Change 1 of 1')
       expect(actions!.textContent).toContain('Keep')
       expect(actions!.textContent).toContain('Revert')
 

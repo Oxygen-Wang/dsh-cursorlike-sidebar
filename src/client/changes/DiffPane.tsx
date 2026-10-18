@@ -33,6 +33,26 @@ import { BinaryDownload } from '../binary-download.tsx'
 import { DiffFiles } from '../diff/DiffFiles.tsx'
 import { langOfPath } from '../diff/highlight.ts'
 import { buildDiffSegments, diffLines, diffStats, parseUnifiedDiff, unifiedSegments, type DiffRow } from '../diff/rows.ts'
+import {
+  activeHunkOf,
+  buildPendingReview,
+  keepAllReviewHunks,
+  keepReviewHunk,
+  nextPending,
+  previousPending,
+  rejectAllPendingHunks,
+  rejectReviewHunk,
+  REVIEW_UNDO_LIMIT,
+  reviewSummary,
+  reviewText,
+  undoReviewStep,
+  type PendingReview,
+  type ReviewStep,
+  type ReviewUndo,
+} from '../diff/review-model.ts'
+import { reviewBasisOf, sameText } from './op-review.ts'
+import { loadDiffReview, saveDiffReview } from '../diff/review-storage.ts'
+import { WorktreeReview } from '../diff/WorktreeReview.tsx'
 import { useGitDiffTarget } from '../diff/use-git-diff.ts'
 import { parseReadContent, parseReadLines, type FileOp } from './ops.ts'
 import { redactText } from '../redact.ts'
@@ -112,6 +132,94 @@ export function HtmlRenderPreview(props: { src: string; title: string }) {
  *  shape: the global {@link Chip} (its active state is the "on" picture). */
 function PaneToggle(props: { on: boolean; label: string; title?: string; onClick: () => void }) {
   return <Chip active={props.on} title={props.title} onClick={props.onClick}>{props.label}</Chip>
+}
+
+/** The session-lens per-hunk review state (one op). */
+interface OpReviewState {
+  readonly review: PendingReview
+  /** The disk mtime the review was verified against (updated by each write). */
+  readonly mtime: number | null
+  /** The file's bytes as this review last left them. */
+  readonly diskText: string
+  readonly undo: readonly { review: PendingReview; undo: ReviewUndo }[]
+  readonly result: { kind: 'keep' | 'reject'; kept: number; rejected: number } | null
+  readonly busy: boolean
+  readonly error: string | null
+}
+
+/**
+ * The in-diff action bar of one hunk: keep/revert THIS block (which advances
+ * to the next one), navigate, or resolve everything at once. Reverting writes
+ * the reconstruction straight to disk, which the bar's note says.
+ */
+function OpReviewBar(props: {
+  state: OpReviewState
+  onPrevious: () => void
+  onNext: () => void
+  onKeep: () => void
+  onReject: () => void
+  onKeepAll: () => void
+  onRejectAll: () => void
+}) {
+  const { state } = props
+  const summary = reviewSummary(state.review)
+  const active = activeHunkOf(state.review)
+  const index = active === null ? summary.total : state.review.hunks.findIndex(hunk => hunk.id === active) + 1
+  return (
+    <div className={css.reviewBar} data-changes-op-review="" role="group" aria-label={t('changesReview')}>
+      <span className={css.reviewProgress} title={t('changesReviewWriteHint')}>
+        {t('reviewHunkProgress', { index, total: summary.total, remaining: summary.pending })}
+      </span>
+      <button
+        type="button"
+        className={css.reviewNav}
+        disabled={state.busy || summary.pending <= 1}
+        title={t('reviewPrevious')}
+        aria-label={t('reviewPrevious')}
+        onClick={props.onPrevious}
+      >‹</button>
+      <button
+        type="button"
+        className={css.reviewNav}
+        disabled={state.busy || summary.pending <= 1}
+        title={t('reviewNext')}
+        aria-label={t('reviewNext')}
+        onClick={props.onNext}
+      >›</button>
+      <button
+        type="button"
+        className={css.reviewKeep}
+        disabled={state.busy || active === null}
+        onClick={props.onKeep}
+      >
+        {t('reviewKeepHunk')} <kbd className={css.reviewKbd}>Ctrl+K</kbd>
+      </button>
+      <button
+        type="button"
+        className={css.reviewReject}
+        disabled={state.busy || active === null}
+        onClick={props.onReject}
+      >
+        {t('reviewRejectHunk')} <kbd className={css.reviewKbd}>Ctrl+J</kbd>
+      </button>
+      <button
+        type="button"
+        className={css.reviewKeep}
+        disabled={state.busy || summary.pending === 0}
+        onClick={props.onKeepAll}
+      >
+        {t('reviewKeepAll')} <kbd className={css.reviewKbd}>Ctrl+Alt+K</kbd>
+      </button>
+      <button
+        type="button"
+        className={css.reviewReject}
+        disabled={state.busy || summary.pending === 0}
+        onClick={props.onRejectAll}
+      >
+        {t('reviewRejectAll')} <kbd className={css.reviewKbd}>Ctrl+Alt+J</kbd>
+      </button>
+    </div>
+  )
 }
 
 /** One tab of the pane's optional strip. */
@@ -223,6 +331,8 @@ export function diffTabOf(ref: SidebarDiffRef): SidebarTab {
 }
 
 export interface DiffPaneProps {
+  /** Fill a dedicated diff tab; omit preview resize/close controls. */
+  fill?: boolean
   target: ChangesPreview
   ctx: Context
   scope: SessionScope
@@ -242,6 +352,12 @@ export interface DiffPaneProps {
   /** The active tab id; an id not listed lands on the built-in home. */
   activeTab?: string
   onSelectTab?(id: string): void
+  /** Whether this pane is on screen (a parked tab body stays mounted). The
+   *  per-hunk review's shortcuts are gated on it. */
+  visible?: boolean
+  /** Called once an op's review resolves every line: the caller advances the
+   *  queue to the next changed file. */
+  onReviewComplete?: (callId: string) => void
 }
 
 /** One tab's "nothing here" body — a page-level empty notice. */
@@ -249,14 +365,14 @@ function PaneEmpty({ text }: { text: string }) {
   return <div className={css.paneBody}><Notice kind="empty" tone="page">{text}</Notice></div>
 }
 
-export function DiffPane({ target, ctx, scope, height, onHeightCommit, onClose, onExpand, tabs, bodies, activeTab, onSelectTab }: DiffPaneProps) {
+export function DiffPane({ target, ctx, scope, height, onHeightCommit, onClose, onExpand, tabs, bodies, activeTab, onSelectTab, visible = true, onReviewComplete, fill = false }: DiffPaneProps) {
   // ── Git target loading (the shared loader: staged-side fallback, the
   //    untracked full-addition fallback, refresh by tick, fold cache). ─────
   const gitRef = target.kind === 'git' ? target.ref : null
   /** The git target when it is a WORKTREE file (the only git target with a
    *  content view, and the only one carrying a `path`). */
   const gitWorktree = gitRef !== null && gitRef.kind === 'worktree' ? gitRef : null
-  const { loading, error, diffText, untracked, refresh, resolveFold } = useGitDiffTarget(gitRef, scope)
+  const { loading, error, diffText, untracked, refresh, resolveFold, effectiveStaged } = useGitDiffTarget(gitRef, scope)
 
   // ── The pane's views, resolved BEFORE anything loads: which tabs exist and
   //    which one is on screen. Computed from raw target facts (`kind` and
@@ -378,13 +494,443 @@ export function DiffPane({ target, ctx, scope, height, onHeightCommit, onClose, 
     return { op: redacted, prior: priorMasked.masked, redactionHit: true }
   }, [opRaw, priorRaw, target, redactionOn])
   const opLang = useMemo(() => (target.kind === 'op' ? langOfPath(target.path) : undefined), [target])
-  const opRows = useMemo(() => (op === null ? [] : diffOf(op, prior)), [op, prior])
-  const opSegments = useMemo(() => buildDiffSegments(opRows), [opRows])
-  const opStats = useMemo(() => diffStats(opSegments), [opSegments])
   const opReadLines = useMemo(
     () => (op?.kind === 'read' && op.read !== undefined ? parseReadLines(op.read) : []),
     [op],
   )
+
+  // ── Per-hunk review of a session op (the changes page's "confirm/reject
+  //    these changes"). Only a full-document basis can be written back, and
+  //    only while the file still holds exactly the op's result; everything
+  //    else keeps the read-only diff. ────────────────────────────────────────
+  const opAbsPath = target.kind === 'op' ? resolveSidebarPath(scope.cwd, target.path) : ''
+  const reviewIdentity = target.kind === 'op' ? `${opAbsPath}:${target.op.callId}` : ''
+  // A stable identity for "the same op content". The session poll re-folds its
+  // op array on every event, giving `target` a new object identity even when
+  // nothing about this op changed; keying the load effect on the object would
+  // then reset an in-progress review on every unrelated event. Include the
+  // entire payload so equal-length edits cannot share an identity.
+  const reviewSourceKey = target.kind === 'op'
+    ? JSON.stringify([
+      target.op.callId,
+      target.op.running ? 1 : 0,
+      target.op.isError ? 1 : 0,
+      target.op.edit?.oldString,
+      target.op.edit?.newString,
+      target.op.content,
+      target.prior,
+      target.path,
+    ])
+    : ''
+  const [opReview, setOpReview] = useState<OpReviewState | null>(null)
+  const opReviewRef = useRef<OpReviewState | null>(null)
+  /** The review whose completion already advanced the queue (restored,
+   *  already-decided reviews must not jump again on mount). */
+  const jumpedRef = useRef<PendingReview | null>(null)
+  const reviewOwnerRef = useRef({ source: reviewSourceKey, sessionId: scope.sessionId, cwd: scope.cwd })
+  if (reviewOwnerRef.current.source !== reviewSourceKey || reviewOwnerRef.current.sessionId !== scope.sessionId || reviewOwnerRef.current.cwd !== scope.cwd) {
+    reviewOwnerRef.current = { source: reviewSourceKey, sessionId: scope.sessionId, cwd: scope.cwd }
+  }
+  opReviewRef.current = opReview
+  const [reviewNotice, setReviewNotice] = useState<string | null>(null)
+  const opBodyRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    opReviewRef.current = null
+    setOpReview(null)
+    setReviewNotice(null)
+    if (target.kind !== 'op' || target.op.isError) return
+    // The row's bytes are masked while redaction is on; deciding a block from
+    // masked text would write the mask back. The plain diff stays available.
+    if (redactionHit) {
+      setReviewNotice(t('changesReviewUnavailable'))
+      return
+    }
+    const knownBasis = reviewBasisOf(target.op, target.prior)
+    let cancelled = false
+    api.fsRead(scope, opAbsPath).then((result) => {
+      if (cancelled) return
+      if (result.kind !== 'text') {
+        setReviewNotice(t('changesReviewUnavailable'))
+        return
+      }
+      let stored = loadDiffReview(scope.sessionId, reviewIdentity, opAbsPath, result.content)
+      if (stored?.splitLines === true) stored = buildPendingReview(stored.base, result.content, opAbsPath)
+      // An edit without a preceding read can still be reconstructed from its
+      // unique replacement in the full live file. Never write a fragment.
+      let basis = knownBasis
+      const edit = target.op.edit
+      if (basis === null && edit !== undefined && edit.newString !== '') {
+        const at = result.content.indexOf(edit.newString)
+        if (at !== -1 && result.content.indexOf(edit.newString, at + 1) === -1) {
+          basis = { base: result.content.slice(0, at) + edit.oldString + result.content.slice(at + edit.newString.length), target: result.content }
+        }
+      }
+      if (stored === null && basis === null) {
+        setReviewNotice(t('changesReviewNoPrior'))
+        return
+      }
+      const baseText = stored?.base ?? basis!.base
+      const targetText = stored?.target ?? basis!.target
+      if (redactionOn && (redactText(opAbsPath, baseText).hit || redactText(opAbsPath, targetText).hit)) {
+        setReviewNotice(t('changesReviewUnavailable'))
+        return
+      }
+      // A file that no longer holds the op's result has another revision on
+      // disk: writing a reconstruction back would clobber it.
+      if (stored === null && basis !== null && !sameText(result.content, basis.target)) {
+        setReviewNotice(t('changesReviewDiskChanged'))
+        return
+      }
+      const review = stored ?? buildPendingReview(basis!.base, basis!.target, opAbsPath)
+      if (review.hunks.length === 0) return
+      const summary = reviewSummary(review)
+      const savedResult = review.decided
+        ? {
+          kind: (summary.rejected > 0 ? 'reject' : 'keep') as 'keep' | 'reject',
+          kept: summary.kept,
+          rejected: summary.rejected,
+        }
+        : null
+      // A restored review that was already fully resolved keeps its result bar
+      // but must not advance the queue on mount: the reader picked this file.
+      jumpedRef.current = review.decided ? review : null
+      const state: OpReviewState = {
+        review,
+        mtime: typeof result.mtimeMs === 'number' ? result.mtimeMs : null,
+        diskText: result.content,
+        undo: [],
+        result: savedResult,
+        busy: false,
+        error: null,
+      }
+      opReviewRef.current = state
+      saveDiffReview(scope.sessionId, reviewIdentity, review)
+      setOpReview(state)
+    }).catch(() => {
+      if (!cancelled) setReviewNotice(t('changesReviewUnavailable'))
+    })
+    return () => { cancelled = true }
+    // `reviewSourceKey` stands in for the op's target: a new op (or changed
+    // payload) reloads, an unrelated poll re-fold does not. The scope object's
+    // identity churns too; only its sessionId / cwd gate the read.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reviewSourceKey, redactionHit, opAbsPath, scope.sessionId, scope.cwd])
+
+  /** Publish one applied step, its document text and the write's new mtime. */
+  const commitOpReview = (step: ReviewStep, diskText: string, mtime?: number): void => {
+    // Apply eagerly (ref + state) so two quick clicks each build on the
+    // previous decision instead of both reading a stale ref.
+    const previous = opReviewRef.current
+    if (previous === null) return
+    const undo = [...previous.undo, { review: step.review, undo: step.undo }].slice(-REVIEW_UNDO_LIMIT)
+    const summary = reviewSummary(step.review)
+    const result = step.review.decided
+      ? {
+        kind: (summary.rejected > 0 ? 'reject' : 'keep') as 'keep' | 'reject',
+        kept: summary.kept,
+        rejected: summary.rejected,
+      }
+      : null
+    const next: OpReviewState = {
+      ...previous,
+      review: step.review,
+      diskText,
+      undo,
+      result,
+      busy: false,
+      error: null,
+      mtime: mtime ?? previous.mtime,
+    }
+    opReviewRef.current = next
+    saveDiffReview(scope.sessionId, reviewIdentity, step.review)
+    setOpReview(next)
+  }
+
+  /** Apply one step: write the reconstruction when it differs from the disk. */
+  const runOpStep = async (step: ReviewStep, text: string): Promise<void> => {
+    const state = opReviewRef.current
+    if (state === null || state.busy) return
+    const owner = reviewOwnerRef.current
+    if (text === state.diskText) {
+      commitOpReview(step, state.diskText)
+      return
+    }
+    const locked = { ...state, busy: true, error: null }
+    opReviewRef.current = locked
+    setOpReview(locked)
+    try {
+      if (state.mtime === null) throw new Error(t('changesReviewUnavailable'))
+      const result = await api.fsWrite(scope, opAbsPath, text, state.mtime)
+      saveDiffReview(scope.sessionId, reviewIdentity, step.review)
+      if (reviewOwnerRef.current !== owner) return
+      commitOpReview(step, text, typeof result.mtimeMs === 'number' ? result.mtimeMs : undefined)
+    } catch (error) {
+      if (reviewOwnerRef.current !== owner) return
+      setOpReview(previous => previous === null ? previous : {
+        ...previous,
+        busy: false,
+        error: error instanceof Error ? error.message : t('saveFailed'),
+      })
+    }
+  }
+
+  /** Keep one line: only its decision changes unless earlier lines were reverted. */
+  const keepOpHunk = async (id?: number): Promise<void> => {
+    const state = opReviewRef.current
+    if (state === null || state.busy) return
+    const active = activeHunkOf(state.review)
+    const targetId = id ?? active
+    if (targetId === null) return
+    const step = keepReviewHunk(state.review, targetId)
+    if (step.review === state.review) return
+    await runOpStep(step, reviewText(step.review))
+  }
+
+  /** Revert one line: its old side goes back into the reconstruction. */
+  const rejectOpHunk = async (id?: number): Promise<void> => {
+    const state = opReviewRef.current
+    if (state === null || state.busy) return
+    const active = activeHunkOf(state.review)
+    const targetId = id ?? active
+    if (targetId === null) return
+    const step = rejectReviewHunk(state.review, targetId)
+    if (step.review === state.review) return
+    await runOpStep(step, step.text ?? reviewText(step.review))
+  }
+
+  const keepAllOpHunks = async (): Promise<void> => {
+    const state = opReviewRef.current
+    if (state === null || state.busy) return
+    if (!state.review.hunks.some(hunk => hunk.decision === 'pending')) return
+    const step = keepAllReviewHunks(state.review)
+    await runOpStep(step, reviewText(step.review))
+  }
+
+  const rejectAllOpHunks = async (): Promise<void> => {
+    const state = opReviewRef.current
+    if (state === null || state.busy) return
+    if (!state.review.hunks.some(hunk => hunk.decision === 'pending')) return
+    const step = rejectAllPendingHunks(state.review)
+    if (step.text === null) return
+    await runOpStep(step, step.text)
+  }
+
+  const navigateOpReview = (direction: 'next' | 'previous'): void => {
+    const state = opReviewRef.current
+    if (state === null) return
+    const active = activeHunkOf(state.review)
+    if (active === null) return
+    const targetId = direction === 'next'
+      ? nextPending(active, state.review.hunks)
+      : previousPending(active, state.review.hunks)
+    if (targetId === null || targetId === active) return
+    const next: OpReviewState = { ...state, review: { ...state.review, active: targetId } }
+    opReviewRef.current = next
+    setOpReview(next)
+  }
+
+  const undoOpReview = async (): Promise<void> => {
+    const state = opReviewRef.current
+    if (state === null || state.busy) return
+    const owner = reviewOwnerRef.current
+    const entry = state.undo[state.undo.length - 1]
+    if (entry === undefined) return
+    const restored = undoReviewStep(entry.review, entry.undo)
+    const text = restored.text ?? reviewText(restored.review)
+    const apply = (mtime?: number): void => {
+      const previous = opReviewRef.current
+      if (previous === null) return
+      const undo = previous.undo.slice(0, -1)
+      const next: OpReviewState = {
+        ...previous,
+        review: restored.review,
+        diskText: text,
+        undo,
+        result: null,
+        busy: false,
+        error: null,
+        mtime: mtime ?? previous.mtime,
+      }
+      opReviewRef.current = next
+      saveDiffReview(scope.sessionId, reviewIdentity, restored.review)
+      setOpReview(next)
+    }
+    if (text === state.diskText) {
+      apply()
+      return
+    }
+    const locked = { ...state, busy: true, error: null }
+    opReviewRef.current = locked
+    setOpReview(locked)
+    try {
+      if (state.mtime === null) throw new Error(t('changesReviewUnavailable'))
+      const result = await api.fsWrite(scope, opAbsPath, text, state.mtime)
+      saveDiffReview(scope.sessionId, reviewIdentity, restored.review)
+      if (reviewOwnerRef.current !== owner) return
+      apply(typeof result.mtimeMs === 'number' ? result.mtimeMs : undefined)
+    } catch (error) {
+      if (reviewOwnerRef.current !== owner) return
+      setOpReview(previous => previous === null ? previous : {
+        ...previous,
+        busy: false,
+        error: error instanceof Error ? error.message : t('saveFailed'),
+      })
+    }
+  }
+
+  // Ctrl/Cmd+K/J decide the active hunk, Ctrl+Alt+K/J resolve all of them,
+  // Ctrl/Cmd+Z walks the last decision back. Active only while this pane is
+  // on screen and focus is not in a text field (the composer keeps its keys).
+  useEffect(() => {
+    if (!visible || opReview === null) return
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.defaultPrevented || event.isComposing) return
+      if (!(event.ctrlKey || event.metaKey)) return
+      const focused = document.activeElement
+      if (!(focused instanceof Element)) return
+      // Scope the review keys to the changes tab (its list or this pane): a
+      // reader typing in the conversation must keep every shortcut.
+      const pane = opBodyRef.current?.closest('[data-diff-pane]')
+      const changes = pane?.closest('[data-changes-tab]')
+      if (!pane?.contains(focused) && (changes == null || !changes.contains(focused) || focused.closest('[data-diff-pane]') !== null)) return
+      if (focused instanceof HTMLElement && focused.closest('input, textarea, [contenteditable="true"]') !== null) return
+      const key = event.key.toLowerCase()
+      if (key === 'z' && !event.shiftKey && !event.altKey) {
+        if (opReviewRef.current === null || opReviewRef.current.undo.length === 0) return
+        event.preventDefault()
+        event.stopPropagation()
+        void undoOpReview()
+        return
+      }
+      if (event.altKey) {
+        if (key === 'k') {
+          event.preventDefault()
+          event.stopPropagation()
+          void keepAllOpHunks()
+        } else if (key === 'j') {
+          event.preventDefault()
+          event.stopPropagation()
+          void rejectAllOpHunks()
+        }
+        return
+      }
+      if (key === 'k') {
+        event.preventDefault()
+        event.stopPropagation()
+        void keepOpHunk()
+      } else if (key === 'j') {
+        event.preventDefault()
+        event.stopPropagation()
+        void rejectOpHunk()
+      }
+    }
+    document.addEventListener('keydown', onKey, true)
+    return () => { document.removeEventListener('keydown', onKey, true) }
+  })
+
+  // Follow the bar when it advances: bring the new hunk into view.
+  const reviewActive = opReview === null ? null : activeHunkOf(opReview.review)
+  useEffect(() => {
+    if (reviewActive === null) return
+    const host = opBodyRef.current
+    if (host === null) return
+    const row = host.querySelector<HTMLElement>(`[data-review-hunk="${reviewActive}"][data-review-active="true"]`)
+    row?.scrollIntoView?.({ block: 'center' })
+  }, [reviewActive, opReview?.review])
+
+  // When every line is resolved, hand the queue back to the changes tab so it
+  // can move to the next changed file (the "jump to the next diff" step).
+  useEffect(() => {
+    if (opReview?.result == null || target.kind !== 'op') return
+    if (jumpedRef.current === opReview.review) return
+    jumpedRef.current = opReview.review
+    onReviewComplete?.(target.op.callId)
+    // Fire once per resolved review (the result object is stable until the
+    // next action), and read the latest callback through the closure.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [opReview?.result])
+
+  const reviewBase = opReview?.review.base
+  const reviewTarget = opReview?.review.target
+  const opRows = useMemo(() => reviewBase !== undefined && reviewTarget !== undefined && !redactionHit
+    ? diffLines(reviewBase, reviewTarget)
+    : op === null ? [] : diffOf(op, prior), [reviewBase, reviewTarget, redactionHit, op, prior])
+  const opSegments = useMemo(() => buildDiffSegments(opRows), [opRows])
+  const opStats = useMemo(() => diffStats(opSegments), [opSegments])
+  const opRowIndex = useMemo(
+    () => new Map(opRows.map((row, index) => [row, index])),
+    [opRows],
+  )
+  const opReviewOverlay = useMemo(() => {
+    if (opReview === null) return undefined
+    const hunkOfRow = new Map<number, number>()
+    const decisionOfHunk = new Map<number, 'pending' | 'keep' | 'reject'>()
+    const hunkTail = new Map<number, number>()
+    for (const hunk of opReview.review.hunks) {
+      decisionOfHunk.set(hunk.id, hunk.decision)
+      for (const row of hunk.rows) hunkOfRow.set(row, hunk.id)
+      hunkTail.set(hunk.id, hunk.rowEnd)
+    }
+    const active = activeHunkOf(opReview.review)
+    const activeHunk = active === null ? undefined : opReview.review.hunks.find(hunk => hunk.id === active)
+    return {
+      rowIndex: opRowIndex,
+      hunkOfRow,
+      decisionOfHunk,
+      hunkTail,
+      active,
+      activeEnd: activeHunk?.rowEnd ?? null,
+      rowActions: (hunkId: number) => {
+        const decision = decisionOfHunk.get(hunkId) ?? 'pending'
+        return (
+          <>
+            <button
+              type="button"
+              className={css.lineAction}
+              data-action="keep"
+              data-current={decision === 'keep' ? 'true' : undefined}
+              disabled={opReview.busy}
+              title={t('reviewKeepHunk')}
+              aria-label={t('reviewKeepHunk')}
+              onClick={(event) => {
+                event.preventDefault()
+                event.stopPropagation()
+                void keepOpHunk(hunkId)
+              }}
+            >✓</button>
+            <button
+              type="button"
+              className={css.lineAction}
+              data-action="reject"
+              data-current={decision === 'reject' ? 'true' : undefined}
+              disabled={opReview.busy}
+              title={t('reviewRejectHunk')}
+              aria-label={t('reviewRejectHunk')}
+              onClick={(event) => {
+                event.preventDefault()
+                event.stopPropagation()
+                void rejectOpHunk(hunkId)
+              }}
+            >✕</button>
+          </>
+        )
+      },
+      bar: (
+        <OpReviewBar
+          state={opReview}
+          onPrevious={() => { navigateOpReview('previous') }}
+          onNext={() => { navigateOpReview('next') }}
+          onKeep={() => { void keepOpHunk() }}
+          onReject={() => { void rejectOpHunk() }}
+          onKeepAll={() => { void keepAllOpHunks() }}
+          onRejectAll={() => { void rejectAllOpHunks() }}
+        />
+      ),
+    }
+    // The handlers read `opReviewRef`, so the overlay only needs to rebuild
+    // when the review state itself changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [opReview, opRowIndex])
 
   // ── Content tab material: the file's full text, its source lines and the
   //    rendered variants (the tab set itself was resolved at the top). ──────
@@ -501,7 +1047,7 @@ export function DiffPane({ target, ctx, scope, height, onHeightCommit, onClose, 
   // content inside the frame changes. Nothing available → its empty state.
   if (activeExtra) {
     return (
-      <div className={css.diffPane} style={{ height: paneHeight }}>
+      <div className={css.diffPane} data-diff-pane="" style={{ height: paneHeight }}>
         {handle}
         {strip}
         <div className={css.altBody}>{bodies?.[active] ?? <PaneEmpty text={t('changesNoContent')} />}</div>
@@ -551,8 +1097,8 @@ export function DiffPane({ target, ctx, scope, height, onHeightCommit, onClose, 
   )
 
   return (
-    <div className={css.diffPane} style={{ height: paneHeight }}>
-      {handle}
+    <div className={css.diffPane} data-diff-pane="" style={{ height: fill ? '100%' : paneHeight }}>
+      {!fill && handle}
       {strip}
       <div className={css.diffHead}>
         {target.kind === 'op' && (
@@ -616,12 +1162,12 @@ export function DiffPane({ target, ctx, scope, height, onHeightCommit, onClose, 
             onClick={() => { setContentRaw(value => !value) }}
           />
         )}
-        <IconButton
+        {!fill && <IconButton
           size="sm"
           icon={<IconCloseOutlineRegular size={14} />}
           label={t('changesClosePreview')}
           onClick={onClose}
-        />
+        />}
       </div>
       {active === 'content'
         ? (hasContentTab ? contentBody : <PaneEmpty text={t('changesNoContent')} />)
@@ -640,11 +1186,38 @@ export function DiffPane({ target, ctx, scope, height, onHeightCommit, onClose, 
             ? <PaneEmpty text={t('changesReadNoDiff')} />
             : target.kind === 'op'
               ? (
-                <div className={css.paneBody}>
+                <div className={css.paneBody} ref={opBodyRef}>
                   {op !== null && op.kind === 'write'
                     && prior === undefined
                     && <Notice kind="hint" tone="inline">{t('changesPriorUnknown')}</Notice>}
-                  <DiffRows key={target.op.callId} segments={opSegments} lang={opLang} />
+                  {opReview?.result != null && (
+                    <div className={css.reviewBar} data-changes-op-review="">
+                      <span className={css.reviewProgress}>
+                        {opReview.result.kind === 'keep' ? t('reviewKept') : t('reviewRejected')}
+                      </span>
+                      <button
+                        type="button"
+                        className={css.reviewNav}
+                        disabled={opReview.busy || opReview.undo.length === 0}
+                        onClick={() => { void undoOpReview() }}
+                      >
+                        {t('reviewUndo')} <kbd className={css.reviewKbd}>Ctrl+Z</kbd>
+                      </button>
+                      <span className={css.reviewHint}>{t('changesReviewWriteHint')}</span>
+                    </div>
+                  )}
+                  {opReview === null && reviewNotice !== null && (
+                    <Notice kind="hint" tone="inline">{reviewNotice}</Notice>
+                  )}
+                  {opReview?.error != null && (
+                    <Notice kind="error">{t('saveFailed')}: {opReview.error}</Notice>
+                  )}
+                  <DiffRows
+                    key={target.op.callId}
+                    segments={opSegments}
+                    lang={opLang}
+                    review={opReviewOverlay}
+                  />
                 </div>
               )
               : loading
@@ -660,7 +1233,10 @@ export function DiffPane({ target, ctx, scope, height, onHeightCommit, onClose, 
                       {/* The untracked fallback has NO diff text (git diff never
                           lists the file): its content is the whole render. */}
                       {((diffText !== null && diffText !== '') || untracked !== undefined) && (
-                        <DiffFiles
+                        target.ref.kind === 'worktree' && effectiveStaged === false
+                        ? <WorktreeReview key={diffText} ctx={ctx} scope={scope} diff={target.ref} fallback={<DiffFiles diff={diffText ?? ''} resolveFold={resolveFold}
+                            untrackedPath={untracked !== undefined ? target.ref.path : undefined} untrackedContent={untracked} />} />
+                        : <DiffFiles
                           diff={diffText ?? ''}
                           resolveFold={resolveFold}
                           untrackedPath={untracked !== undefined && target.ref.kind === 'worktree' ? target.ref.path : undefined}

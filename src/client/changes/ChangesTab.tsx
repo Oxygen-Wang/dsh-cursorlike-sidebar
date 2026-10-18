@@ -66,6 +66,7 @@ type PaneTabId = 'details' | 'content' | 'diff'
 
 /** The persisted tab meta (JSON-serializable; rides the layout). */
 interface ChangesMeta {
+  selection?: PreviewSelection | null
   lens?: Lens
   previewH?: number
   paneTab?: PaneTabId
@@ -79,11 +80,35 @@ type PreviewSelection =
   | { kind: 'git'; ref: SidebarDiffRef }
   | { kind: 'op'; path: string; callId: string }
 
+function restoredSelection(value: unknown): PreviewSelection | null {
+  if (value === null || typeof value !== 'object') return null
+  const candidate = value as Partial<PreviewSelection>
+  if (candidate.kind === 'op' && typeof candidate.path === 'string' && typeof candidate.callId === 'string') return candidate as PreviewSelection
+  if (candidate.kind !== 'git' || candidate.ref === null || typeof candidate.ref !== 'object') return null
+  const ref = candidate.ref
+  if (ref.kind === 'worktree' && typeof ref.path === 'string' && typeof ref.staged === 'boolean') return { kind: 'git', ref }
+  if (ref.kind === 'commit' && typeof ref.hash === 'string' && typeof ref.hashFull === 'string' && typeof ref.subject === 'string') return { kind: 'git', ref }
+  return null
+}
+
 export function ChangesTab({ ctx, store, scope, tab, visible, onOpenFile, onOpenDiff }: TabComponentProps) {
   const meta = (tab.meta ?? {}) as ChangesMeta
   const lensId = useId()
   const [lens, setLens] = useState<Lens>(meta.lens === 'session' ? 'session' : 'git')
-  const [selection, setSelection] = useState<PreviewSelection | null>(null)
+  const [selection, setSelection] = useState<PreviewSelection | null>(() => restoredSelection(meta.selection))
+  const metaRef = useRef(meta)
+  const incomingMetaRef = useRef(tab.meta)
+  if (incomingMetaRef.current !== tab.meta) {
+    incomingMetaRef.current = tab.meta
+    metaRef.current = meta
+  }
+  const savedSelectionRef = useRef(selection)
+  useEffect(() => {
+    if (savedSelectionRef.current === selection) return
+    savedSelectionRef.current = selection
+    metaRef.current = { ...metaRef.current, selection }
+    ctx.get('betterSidebar')?.updateTab(tab.id, { meta: metaRef.current }, scope.sessionId)
+  }, [selection, ctx, tab.id, scope.sessionId])
   /** The Git Graph's selected commit (its card + the ref tones it needs), or
    *  null while nothing is selected there. Null keeps the pane diff-only. */
   const [graphDetails, setGraphDetails] = useState<GraphDetailsSelection | null>(null)
@@ -186,8 +211,9 @@ export function ChangesTab({ ctx, store, scope, tab, visible, onOpenFile, onOpen
 
   /** Persist a meta patch onto the tab (lens choice, pane height, pane tab). */
   const patchMeta = (patch: ChangesMeta): void => {
+    metaRef.current = { ...metaRef.current, ...patch }
     ctx.get('betterSidebar')?.updateTab(tab.id, {
-      meta: { ...(tab.meta as ChangesMeta | undefined ?? {}), ...patch },
+      meta: metaRef.current,
     }, scope.sessionId)
   }
 
@@ -233,6 +259,27 @@ export function ChangesTab({ ctx, store, scope, tab, visible, onOpenFile, onOpen
     chooseBottomTab(op.kind === 'read' ? 'content' : 'diff')
   }
 
+  /**
+   * Move the review queue to the next changed file. Called when the bottom
+   * pane's per-line review resolves every line of its op: the lens selects the
+   * next write/edit op (newest-first order, wrapping) so confirming a file
+   * lands the reader on the next diff without another click.
+   */
+  const reviewNextFile = (callId: string): void => {
+    const list = opsRef.current
+    const index = list.findIndex(op => op.callId === callId)
+    if (index === -1) return
+    for (let step = 1; step <= list.length; step += 1) {
+      const candidate = list[(index + step) % list.length]!
+      if (candidate.callId === callId) break
+      if ((candidate.kind === 'write' || candidate.kind === 'edit') && !candidate.isError && !candidate.running) {
+        setSelection({ kind: 'op', path: candidate.path, callId: candidate.callId })
+        chooseBottomTab('diff')
+        return
+      }
+    }
+  }
+
   /** Expand the current git preview into the dedicated diff tab, docked
    *  into the workbench's diff pane. */
   const expandPreview = (): void => {
@@ -247,7 +294,7 @@ export function ChangesTab({ ctx, store, scope, tab, visible, onOpenFile, onOpen
     : `op:${target.op.callId}`
 
   return (
-    <div className={css.root}>
+    <div className={css.root} data-changes-tab="">
       <div className={css.head}>
         {/* ponytail: conversation Tabs are private in DSH 0.2.0-rc.2; reuse
             their CSS classes until the host exports the component. */}
@@ -324,10 +371,12 @@ export function ChangesTab({ ctx, store, scope, tab, visible, onOpenFile, onOpen
           target={previewTarget}
           ctx={ctx}
           scope={scope}
+          visible={visible}
           height={paneHeight}
           onHeightCommit={(height) => { setPaneHeight(height); patchMeta({ previewH: height }) }}
           onClose={() => { setSelection(null) }}
           onExpand={expandPreview}
+          onReviewComplete={reviewNextFile}
           // The tab set is PINNED, not derived: the three views are the same
           // panel in every lens (details of the selected commit, the file's own
           // content, the patch). A view with nothing to show renders its empty

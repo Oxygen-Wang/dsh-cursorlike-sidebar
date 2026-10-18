@@ -68,6 +68,8 @@ export declare function PaneTabStrip(props: {
 /** The diff tab a git preview expands into (the shell owns placement). */
 export declare function diffTabOf(ref: SidebarDiffRef): SidebarTab;
 export interface DiffPaneProps {
+    /** Fill a dedicated diff tab; omit preview resize/close controls. */
+    fill?: boolean;
     target: ChangesPreview;
     ctx: Context;
     scope: SessionScope;
@@ -87,5 +89,11 @@ export interface DiffPaneProps {
     /** The active tab id; an id not listed lands on the built-in home. */
     activeTab?: string;
     onSelectTab?(id: string): void;
+    /** Whether this pane is on screen (a parked tab body stays mounted). The
+     *  per-hunk review's shortcuts are gated on it. */
+    visible?: boolean;
+    /** Called once an op's review resolves every line: the caller advances the
+     *  queue to the next changed file. */
+    onReviewComplete?: (callId: string) => void;
 }
-export declare function DiffPane({ target, ctx, scope, height, onHeightCommit, onClose, onExpand, tabs, bodies, activeTab, onSelectTab }: DiffPaneProps): import("react").JSX.Element;
+export declare function DiffPane({ target, ctx, scope, height, onHeightCommit, onClose, onExpand, tabs, bodies, activeTab, onSelectTab, visible, onReviewComplete, fill }: DiffPaneProps): import("react").JSX.Element;

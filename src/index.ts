@@ -28,7 +28,8 @@ import {
 } from './config.ts'
 import { createProbeGate, listDirectory, messageOf, parentOf, requireAbsolute, rootLabel, type SidebarFsEntry } from './fs-tree.ts'
 import { resolveSessionPath } from './session-path.ts'
-import { createWorkspaceFile, mkdirWorkspaceEntry, renameWorkspaceEntry, removeWorkspaceEntry, writeWorkspaceText, writeWorkspaceUpload } from './fs-operations.ts'
+import { writeWorkspaceUpload } from './fs-operations.ts'
+import { FileOperationHistory } from './file-history.ts'
 import { ensureWorkspacePath } from './path-security.ts'
 import { searchFiles } from './fs-search.ts'
 import { compileExcludePatterns } from './exclude-patterns.ts'
@@ -634,7 +635,14 @@ function buildApi(
   getSettings: () => SidebarSettingsFace | undefined,
   assistantLive: AssistantLiveBuffer,
   archiveTasks: ArchiveTasks,
+  fileHistory: FileOperationHistory,
 ): Record<string, ApiMethod> {
+  const groupOf = (payload: unknown): string | undefined => {
+    const value = (payload as { historyGroup?: unknown }).historyGroup
+    if (value === undefined) return undefined
+    if (typeof value !== 'string' || value.length === 0 || value.length > 128) throw new SidebarError('bad-request', 'invalid history group', 400)
+    return value
+  }
   const cwdOf = async (payload: unknown): Promise<{ sessionId: string; cwd: string }> => {
     const sessionId = requireString(payload, 'sessionId')
     const record = payload as { cwd?: unknown } | null
@@ -784,19 +792,25 @@ function buildApi(
     // workspace-root refusals, link-aware (renames the row, not its target).
     // fs-operations.ts owns the containment and shape rules.
     'fs.rename': async (payload) => {
-      const { cwd } = await cwdOf(payload)
-      return renameWorkspaceEntry({
-        cwd,
+      return fileHistory.execute(await cwdOf(payload), {
+        kind: 'rename',
         path: requireString(payload, 'path'),
         name: requireString(payload, 'name'),
       })
     },
+    'fs.history': async (payload) => fileHistory.state(await cwdOf(payload)),
+    'fs.undo': async (payload) => fileHistory.replay(await cwdOf(payload), 'undo', requireString(payload, 'expectedId')),
+    'fs.redo': async (payload) => fileHistory.replay(await cwdOf(payload), 'redo', requireString(payload, 'expectedId')),
     // The tree's "new folder": one directory inside an existing row, with
     // the same single-segment/existence rules as rename.
+    'fs.transfer': async (payload) => {
+      const mode = requireString(payload, 'mode')
+      if (mode !== 'copy' && mode !== 'move') throw new SidebarError('bad-request', 'mode must be copy or move', 400)
+      return fileHistory.execute(await cwdOf(payload), { kind: mode, path: requireString(payload, 'path'), dir: requireString(payload, 'dir'), group: groupOf(payload) })
+    },
     'fs.mkdir': async (payload) => {
-      const { cwd } = await cwdOf(payload)
-      return mkdirWorkspaceEntry({
-        cwd,
+      return fileHistory.execute(await cwdOf(payload), {
+        kind: 'folder',
         path: requireString(payload, 'path'),
         name: requireString(payload, 'name'),
       })
@@ -806,19 +820,16 @@ function buildApi(
     // reserved-device-name refusals a file name has to survive (fs-operations.ts
     // owns both), and a destination that is never truncated.
     'fs.createFile': async (payload) => {
-      const { cwd } = await cwdOf(payload)
-      return createWorkspaceFile({
-        cwd,
+      return fileHistory.execute(await cwdOf(payload), {
+        kind: 'file',
         path: requireString(payload, 'path'),
         name: requireString(payload, 'name'),
       })
     },
-    // The tree row's delete (permanent — the host has no trash): recursive
-    // for directories, unlinks a symlink row without touching its target.
+    // Explorer deletion moves the row to recovery; the journal can undo it.
     'fs.remove': async (payload) => {
-      const { cwd } = await cwdOf(payload)
-      return removeWorkspaceEntry({
-        cwd,
+      return fileHistory.execute(await cwdOf(payload), {
+        kind: 'delete', group: groupOf(payload),
         path: requireString(payload, 'path'),
       })
     },
@@ -1311,6 +1322,7 @@ async function importLegacyPrefs(
  */
 export function apply(ctx: Context, config?: SidebarConfig): void {
   const resolved = resolveSidebarConfig(config)
+  const fileHistory = new FileOperationHistory()
   // Connection owns both deployment trust and authentication; never infer or
   // bypass its policy from invocation flags or a copied trust list.
   const fence = (req: SidebarHttpRequest): boolean => ctx.connection.requestRejection(req) === undefined
@@ -1443,7 +1455,7 @@ export function apply(ctx: Context, config?: SidebarConfig): void {
   // an unmounted plugin must not leave orphan archives in the OS temp dir.
   const archiveTasks = createArchiveTasks()
   ctx.effect(() => () => { archiveTasks.dispose() }, 'dsh-cursorlike-sidebar: archive task table')
-  const api = buildApi(ctx, resolved, () => settingsFace, assistantLive, archiveTasks)
+  const api = buildApi(ctx, resolved, () => settingsFace, assistantLive, archiveTasks, fileHistory)
   ctx.effect(() => ctx.webServer.register({
     kind: 'prefix',
     path: '/sidebar/api',
@@ -1557,7 +1569,7 @@ export function apply(ctx: Context, config?: SidebarConfig): void {
         const parsed = raw === null ? Number.NaN : Number(raw)
         const expectedMtimeMs = Number.isFinite(parsed) ? parsed : undefined
         const content = await readTextBody(req, WRITE_BODY_GUARD_BYTES)
-        const result = await writeWorkspaceText({
+        const result = await fileHistory.write({ sessionId, cwd }, {
           cwd,
           path,
           content,

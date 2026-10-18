@@ -1,5 +1,23 @@
 # 宿主契约与沿用至今的适配约束
 
+## 2026-10-18：文件撤销与恢复
+
+- 文件变更通过 `FileOperationHistory` 记录；`fs.remove` 的 UI 路由改为可恢复移入，不再调用永久删除实现。
+- `fs.history` 返回当前会话/工作区的撤销与重做摘要；`fs.undo` / `fs.redo` 需带 `expectedId`，返回 `state`、`effects` 及可选 `error`。即使回放部分失败，也须应用已完成的 effects 并保留步骤以便重试。
+- 恢复区与日志持久化在工作区父目录的保留目录，不自动清理数据，不修改用户的 `.gitignore` 或 `.ignore`。
+- 编辑器写入路由通过 `history.write` 同步原子保存后的文件身份，避免新建文件保存后无法撤销。
+- 完整范围与未实现边界见[撤销需求](requirements-undo-recovery-zh.md)。
+
+## 2026-10-18：文件搬运 API
+
+- `fs.transfer` 通过现有 sidebar JSON API 调用，payload 携带 session scope、`path`、目标目录 `dir`、`mode: copy | move`，成功返回 `{ path }`。
+- 客户端入口为 `api.fsTransfer`；Host 实现为 `transferWorkspaceEntry`，沿用现有路径解析/写入策略，不重新引入已取消的工作区围栏。
+- 工作区根不可搬运；目录不可移入/复制到自身及其子树，目标目录的符号链接也参与实际位置检查。
+- 复制递归保留链接语义，重名保留两者并追加编号；移动遇到现有目标报冲突，不做目录合并或覆盖。跨磁盘移动不自动退化为复制后删除。
+- 应用内部请求串行化；复制失败可能留下部分副本，进度、取消、外部创建目标的竞争处理仍列在[文件操作需求](requirements-file-browser-zh.md)中。
+- 成功后失效源/目标目录缓存；客户端移动时复用 `onPathRenamed` 路径协调，复制不改变已打开标签路径。
+
+
 > 从 `AGENTS.md` §3 移出的深度参考（原 §3.4 第 1–12 条与 0.1.5–0.1.7 历史线中仍然生效的部分）。
 > **编号保持不变**：代码、测试与文档里写的「AGENTS.md §3.4 第 N 条」就是本文第 N 条。
 > 历史版本已不在支持线内（当前基线 DSH 0.2.1-rc.1，见 [AGENTS.md](../AGENTS.md) §3）；逐条适配过程见 [docs/plans/](plans/) 与 [CHANGELOG.md](../CHANGELOG.md)。

@@ -1,12 +1,10 @@
 import type { BetterSidebarService } from './service.ts';
-export declare function FileColumns(props: {
-    sessionId: string;
-    cwd: string | undefined;
+import { type FileBrowserActionsProps } from './file-browser-actions.tsx';
+import { type FileTreeSort } from './file-tree-sort.ts';
+export declare function FileColumns(props: FileBrowserActionsProps & {
     exclude?: readonly string[];
     visible?: boolean;
     service?: BetterSidebarService;
-    onOpenFile: (path: string) => void;
-    onOpenFileNewTab?: (path: string) => void;
-    onOpenFileSide?: (path: string) => void;
-    onReferenceFile: (path: string, isDir: boolean) => void;
+    refreshTick?: number;
+    sort?: FileTreeSort;
 }): import("react").JSX.Element | null;

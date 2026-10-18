@@ -1,6 +1,6 @@
 {
   "name": "dsh-cursorlike-sidebar",
-  "version": "0.28.0-cursorlike.2",
+  "version": "0.28.0-cursorlike.4-beta.1",
   "description": "CursorLike Sidebar：嵌入 DSH 的文件树、代码编辑、终端、Git、侧边对话与 Ctrl+L/拖放引用交互",
   "type": "module",
   "repository": {
