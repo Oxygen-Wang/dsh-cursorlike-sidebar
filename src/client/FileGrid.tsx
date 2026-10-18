@@ -33,6 +33,17 @@ function parentOf(path: string): string {
 /** Image extensions the large grid renders as real thumbnails. */
 const IMAGE_PATH = /\.(?:avif|bmp|gif|ico|jpe?g|png|svg|webp)$/i
 
+/**
+ * Grid columns by zoom level: the default 48px is the 3-column nine-grid,
+ * smaller icons add a column, larger thumbnails use fewer columns.
+ */
+function columnsForIconSize(size: number): number {
+  if (size >= 112) return 1
+  if (size >= 72) return 2
+  if (size <= 36) return 4
+  return 3
+}
+
 interface GridMenuState {
   entry: FsEntry
   x: number
@@ -134,6 +145,7 @@ export function FileGrid(props: {
 
   const scope = useMemo<SessionScope>(() => ({ sessionId, cwd }), [sessionId, cwd])
   const atRoot = cwd === undefined || currentDir === undefined || currentDir === cwd
+  const columns = columnsForIconSize(iconSize)
   const relative = cwd !== undefined && currentDir !== undefined ? relativeTo(cwd, currentDir) : '.'
   const crumbs = useMemo(() => {
     if (cwd === undefined || currentDir === undefined) return []
@@ -222,7 +234,7 @@ export function FileGrid(props: {
             className={css.fileGrid}
             role="list"
             aria-label={relative}
-            style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${Math.max(88, iconSize + 44)}px, 1fr))` }}
+            style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}
           >
             <button
               type="button"

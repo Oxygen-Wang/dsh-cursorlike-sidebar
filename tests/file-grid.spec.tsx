@@ -51,6 +51,9 @@ describe('FileGrid', () => {
     const back = view.container.querySelector('button[title="Parent directory"]') as HTMLButtonElement | null
     expect(back).not.toBeNull()
     expect(back?.disabled).toBe(true)
+    const grid = view.container.querySelector('[role="list"]') as HTMLElement
+    expect(grid.style.gridTemplateColumns).toContain('repeat(3')
+    expect(grid.firstElementChild).toBe(grid.querySelector('button[title="Parent directory"]'))
 
     const folderButton = [...view.container.querySelectorAll('button')]
       .find(button => button.textContent?.includes('src')) as HTMLButtonElement

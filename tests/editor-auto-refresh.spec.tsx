@@ -557,7 +557,7 @@ describe('editor preview auto-refresh (#855)', () => {
     }
   })
 
-  it('G: an open edit session is left alone (its caret must not jump)', async () => {
+  it('G: an open edit session is refreshed in place (no remount, caret survives)', async () => {
     const store = createSidebarStore()
     const service = createBetterSidebarService(store)
     service.registerTab({ id: 'editor', title: 'Editor', dedupeKey: (tab) => tab.path, component: () => null })
@@ -588,13 +588,18 @@ describe('editor preview auto-refresh (#855)', () => {
       await settle()
       expect(reads()).toBe(1)
       expect(view.container.querySelector('[data-testid="mode"]')!.textContent).toBe('mode-edit')
+      const mountedInput = view.container.querySelector('[data-testid="draft"]')
 
       changesOps.mockResolvedValue(delta(writePair(11, '/tmp/a.ts'), 12))
       await tick(2)
 
-      // No reload while the mode toggle says "edit"; the existing edit→preview
-      // edge and the header's refresh button remain the entry points.
-      expect(reads()).toBe(1)
+      // The edit session is refreshed, but IN PLACE: the same DOM node is
+      // updated (a remount would replace it and reset the viewer's own mode),
+      // and the fresh bytes are on screen.
+      expect(reads()).toBe(2)
+      expect(draftOf(view.container)).toBe('body-2')
+      expect(view.container.querySelector('[data-testid="draft"]')).toBe(mountedInput)
+      expect(view.container.querySelector('[data-testid="mode"]')!.textContent).toBe('mode-edit')
     } finally {
       view.unmount()
       vi.useRealTimers()
