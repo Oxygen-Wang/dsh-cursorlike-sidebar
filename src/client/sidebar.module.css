@@ -2959,7 +2959,7 @@ body[data-dsh-sidebar-dragging] .bottomPanel {
 }
 
 .editorReviewInline {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 6px;
   width: fit-content;
@@ -2970,7 +2970,6 @@ body[data-dsh-sidebar-dragging] .bottomPanel {
   border-radius: 6px;
   background: color-mix(in srgb, var(--dsw-alias-bg-layer-1) 88%, transparent);
   font: var(--dsw-font-xxs-12);
-  vertical-align: middle;
 }
 
 .editorReviewInline .editorReviewText {
