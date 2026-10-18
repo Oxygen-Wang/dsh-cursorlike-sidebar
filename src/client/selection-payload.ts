@@ -67,7 +67,12 @@ function lineAt(source: string, index: number): number {
 
 /** Remove whitespace exactly the way a rendered selection comparison needs. */
 function normalizedSelection(text: string): string {
-  return text.replace(/\s+/g, '')
+  return text
+    .split(/\r?\n/)
+    .map(line => line.replace(/^\s*(?:[-*+]\s+|\d+[.)]\s+|[•◦▪▫]\s*)/, ''))
+    .join('')
+    .replace(/\s+/g, '')
+    .replace(/[•◦▪▫]/g, '')
 }
 
 /**
