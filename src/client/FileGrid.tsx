@@ -157,7 +157,7 @@ export function FileGrid(props: {
   }
 
   return (
-    <div className={css.fileGridRoot} ref={rootRef} tabIndex={0} onKeyDown={onKeyDown}>
+    <div className={css.fileGridRoot} ref={rootRef} tabIndex={0} onKeyDown={onKeyDown} data-cursorlike-file-grid="">
       <div className={css.fileGridHeader}>
         <IconButton
           label={t('parent')}

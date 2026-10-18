@@ -139,6 +139,9 @@ export function Sidebar(props: { ctx: Context; store: SidebarStore }) {
       const zone = target.closest('[data-dsh-cursorlike-sidebar], [data-sidebar-right-panel]')
       const tree = target.closest('[data-cursorlike-drop], [data-cursorlike-path]')
       if (zone === null || tree === null) return
+      // The icon grid is already sized in pixels; Ctrl+wheel there must not
+      // silently consume the gesture (or resize the tree icons behind it).
+      if (target.closest('[data-cursorlike-file-grid]') !== null) return
       event.preventDefault()
       setTreeIconSize((current) => {
         const next = Math.min(TREE_ICON_MAX, Math.max(TREE_ICON_MIN, current - Math.sign(event.deltaY) * 2))
