@@ -19,6 +19,7 @@ interface ColumnMenuState {
   entry: FsEntry
   x: number
   y: number
+  columnIndex: number
 }
 
 /** One directory level in the column strip. */
@@ -190,13 +191,13 @@ export function FileColumns(props: {
             active={index === columns.length - 1}
             onEnter={(path) => openColumn(index, path)}
             onOpenFile={onOpenFile}
-            onMenu={(entry, x, y) => setMenu({ entry, x, y })}
+            onMenu={(entry, x, y) => setMenu({ entry, x, y, columnIndex: index })}
           />
         ))}
       </div>
       {menu !== null && createPortal(
         <div ref={menuRef} className={css.fileGridMenu} style={{ left: menu.x, top: menu.y }} onMouseDown={(event) => event.stopPropagation()}>
-          <button type="button" onClick={() => { if (menu.entry.isDir) openColumn(columns.length - 1, menu.entry.path); else onOpenFile(menu.entry.path); setMenu(null) }}>
+          <button type="button" onClick={() => { if (menu.entry.isDir) openColumn(menu.columnIndex, menu.entry.path); else onOpenFile(menu.entry.path); setMenu(null) }}>
             {t('openEditor')}
           </button>
           {!menu.entry.isDir && onOpenFileNewTab !== undefined && (
