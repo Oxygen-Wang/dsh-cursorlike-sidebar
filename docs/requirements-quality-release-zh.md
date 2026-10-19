@@ -82,5 +82,6 @@
 - [x] 生成 `.test-data/npm-ready/dsh-cursorlike-sidebar-0.28.0-cursorlike.4-beta.1.tgz`；511 文件、4,961,370 字节；包内 7 个 JS 入口/chunk、声明及 bundle patch 与本地逐字节一致，清单无安装生命周期脚本。
 - [x] 待发布包 SHA256：`f4c0c01cf473ee0a27ac62c1e724012568476c392122bd57dfeeefa481a95455`。
 - [x] 查询 GitHub Release：仅有旧版 `v0.28.0-cursorlike.1` 附件，投稿不填当前版本不存在的 tarball URL。
-- [ ] npm 账号认证：`npm whoami --registry=https://registry.npmjs.org` 返回 ENEEDAUTH；需要账号所有者完成登录，不在聊天中提供密码、token 或验证码。
+- [x] npm 账号所有者完成官方网页登录，`npm whoami` 确认为 `anyon12138`；未接触密码、token 或验证码。
+- [ ] npm 发布认证：实际 publish 返回 E403，registry 要求双重认证或有发布权限且允许绕过 2FA 的 granular token。登录成功不代表已满足发布认证；需要账号所有者在 npm 安全设置中完成配置。发布尚未成功，registry 查询仍为 404。
 - [ ] 登录后发布预构建包：`npm publish .test-data/npm-ready/dsh-cursorlike-sidebar-0.28.0-cursorlike.4-beta.1.tgz --access public --tag beta --ignore-scripts --registry=https://registry.npmjs.org`；发布后核对 registry 版本、beta 标签及 dist integrity。当前未发布。
