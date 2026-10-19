@@ -71,9 +71,6 @@ importers:
       '@codemirror/view':
         specifier: ^6.43.8
         version: 6.43.9
-      '@deepseek-ai/schemastery':
-        specifier: ~3.18.5
-        version: 3.18.5
       '@formkit/auto-animate':
         specifier: ^0.10.0
         version: 0.10.0
@@ -204,6 +201,9 @@ importers:
       '@deepseek-ai/dsh-working-directory':
         specifier: 0.2.1-rc.1
         version: 0.2.1-rc.1(01e2df386ad786760bd2c4cba60ada7c)
+      '@deepseek-ai/schemastery':
+        specifier: 3.18.5
+        version: 3.18.5
       '@eslint/js':
         specifier: ^10.0.1
         version: 10.0.1(eslint@10.9.1)

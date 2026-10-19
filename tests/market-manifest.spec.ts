@@ -69,6 +69,10 @@ function packedManifest(): Record<string, unknown> {
 }
 
 describe('DSH community-market manifest compatibility', () => {
+  it('shares official runtime packages with the host through peer dependencies', () => {
+    expect(Object.keys(pkg.dependencies ?? {}).filter(name => name.startsWith('@deepseek-ai/'))).toEqual([])
+    expect(pkg.peerDependencies?.['@deepseek-ai/schemastery']).toBe('~3.18.5')
+  })
   it('declares no cordis entry in any dependency field (dependencies / peerDependencies / optionalDependencies)', () => {
     for (const field of ['dependencies', 'peerDependencies', 'optionalDependencies'] as const) {
       const deps = pkg[field]

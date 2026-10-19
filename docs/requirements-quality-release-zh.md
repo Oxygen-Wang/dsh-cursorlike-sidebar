@@ -74,3 +74,13 @@
 - [x] 串行主测试（排除两份打包 spec）运行 310.89 秒：237 文件通过、2 文件跳过、1 文件失败；2850 项通过、21 项跳过、1 项失败。唯一失败是进程启动时已收集的旧 `fs-mkdir` 无守卫链接用例；补守卫后的定向复验见上，未再次运行完整主套件，因此不将此记录写成“全量全绿”。本轮未复现 Git/e2e 并发超时。
 - [x] 两份打包 spec 单独运行：2 文件、12 项通过。使用当前已有 pnpm，本次测试进程设置 `npm_config_ignore_scripts=true`，验证包内容与市场清单而不触发 prepack 清空 `lib`；声明生成和隔离构建另行通过，不替代发布生命周期验收。
 - [ ] 在干净环境验证完整发布生命周期及宿主安装。本轮未发布、未替换安装包；保留用户已有 `lib` 改动与未跟踪文件，未执行全局 corepack 配置。
+
+## 2026-10-19 npm 发布准备
+
+- [x] `@deepseek-ai/schemastery` 从 dependencies 移至 peerDependencies（`~3.18.5`），开发依赖固定为 `3.18.5`，同步 pnpm 锁文件；官方运行时包不再作为直接 dependencies 发布。
+- [x] 类型检查、声明生成和隔离构建通过；市场/包元数据测试 13 项通过，配置偏好测试 18 项通过。
+- [x] 生成 `.test-data/npm-ready/dsh-cursorlike-sidebar-0.28.0-cursorlike.4-beta.1.tgz`；511 文件、4,961,370 字节；包内 7 个 JS 入口/chunk、声明及 bundle patch 与本地逐字节一致，清单无安装生命周期脚本。
+- [x] 待发布包 SHA256：`f4c0c01cf473ee0a27ac62c1e724012568476c392122bd57dfeeefa481a95455`。
+- [x] 查询 GitHub Release：仅有旧版 `v0.28.0-cursorlike.1` 附件，投稿不填当前版本不存在的 tarball URL。
+- [ ] npm 账号认证：`npm whoami --registry=https://registry.npmjs.org` 返回 ENEEDAUTH；需要账号所有者完成登录，不在聊天中提供密码、token 或验证码。
+- [ ] 登录后发布预构建包：`npm publish .test-data/npm-ready/dsh-cursorlike-sidebar-0.28.0-cursorlike.4-beta.1.tgz --access public --tag beta --ignore-scripts --registry=https://registry.npmjs.org`；发布后核对 registry 版本、beta 标签及 dist integrity。当前未发布。
