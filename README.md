@@ -150,13 +150,29 @@ The plugin preserves DSH's existing Ctrl+B behavior and requires no additional d
 
 Requires DSH 0.2.1-rc.1 or a compatible version. Disable the original `dsh-better-sidebar` before installing, then fully restart DSH after installation or updates.
 
-### npm（发布后可用 · After publication）
+### npm（推荐 · Recommended）
 
-插件发布到 npm 后可安装包名：
+已发布版本：**`0.28.0-cursorlike.4-beta.1`**，当前 npm `latest` 指向此测试版。已验证可从 npm 下载；压缩包约 **4.97 MB**，解压约 **19.94 MB**（不含额外依赖）。
+
+Published version: **`0.28.0-cursorlike.4-beta.1`**, currently tagged `latest`. Download verified; approximately **4.97 MB** compressed and **19.94 MB** unpacked, excluding additional dependencies.
+
+[npm 包页面 · Package](https://www.npmjs.com/package/dsh-cursorlike-sidebar) · [下载当前版本 .tgz · Download](https://registry.npmjs.org/dsh-cursorlike-sidebar/-/dsh-cursorlike-sidebar-0.28.0-cursorlike.4-beta.1.tgz)
+
+安装或更新到 npm `latest`： / Install or update to npm `latest`:
 
 ```powershell
 dsh plugin --profile desktop add dsh-cursorlike-sidebar
 ```
+
+固定安装此版本： / Install this exact version:
+
+```powershell
+dsh plugin --profile desktop add dsh-cursorlike-sidebar@0.28.0-cursorlike.4-beta.1
+```
+
+也可以在 DSH「添加插件」中填写 `dsh-cursorlike-sidebar`。以上命令使用 `desktop` profile；使用 Web profile 时将其替换为 `web`。下载验证不代表已完成所有 DSH 环境的安装与运行验证。
+
+You can also enter `dsh-cursorlike-sidebar` in DSH's Add Plugin dialog. Replace `desktop` with `web` if you use the Web profile. The package download has been verified; installation and runtime behavior still depend on your DSH environment.
 
 只有 npm / GitHub 来源能被 DSH Plugin Market 检查更新；本地 `link:` 安装和固定 tag 的 tarball 不会自动更新。
 
@@ -215,12 +231,9 @@ DSH 的 **Plugin Market** 会为已安装插件做更新检查：
 - **本地 `link:`**：不会自动更新——它始终使用目录里的 `lib`，改完执行 `npm run build` 后刷新页面即可；
 - **固定 tag 的 tarball**：不会自动更新，需要重新安装新 tarball。
 
-所以给最终用户用时，推荐发布到 npm：
+普通用户推荐使用上方 npm 安装命令获取最新版，无需执行 `npm publish`。
 
-```powershell
-npm login
-npm publish --access public --tag latest
-```
+Use the npm installation command above to get the latest published version.
 
 发布后在 DSH「设置 → Plugin Market → 已安装」里检查更新；市场只自动**检查**，应用更新需要点一次 Update（不会静默替换代码）。
 
